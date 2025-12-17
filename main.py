@@ -258,7 +258,7 @@ class VipClaimModal(discord.ui.Modal, title="Vánoční VIP odměna"):
             if not has_hll_role:
                 await interaction.response.send_message(
                     "Pro vyzvednutí této odměny potřebuješ mít na Discordu roli **Hell Let Loose**.\n"
-                    "Můžeš si ji sám přidat v kanálu <id:browse> výběrem příslušné role.",
+                    "Můžeš si ji sám přidat v kanálu <id:customize> výběrem příslušné role.",
                     ephemeral=True,
                 )
                 return
