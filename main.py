@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sqlite3
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -151,6 +152,12 @@ class Player:
     account_lang: Optional[str]
 
 
+@dataclass
+class PlayerSearchResult:
+    player_id: str
+    display_name: str  # Most recent name from names array
+
+
 class ApiClient:
     def __init__(self, base_url: str, bearer_token: str) -> None:
         self.base_url = base_url.rstrip("/")
@@ -231,17 +238,247 @@ class ApiClient:
         resp = await self._client.post("/add_vip", json=payload)
         resp.raise_for_status()
 
+    async def search_players(self, player_name: str) -> list[PlayerSearchResult]:
+        """
+        POST BASE_URL + get_players_history
+        Search for players by name, returns up to 10 results.
+        """
+        payload = {
+            "page": 1,
+            "page_size": 10,
+            "flags": [],
+            "blacklisted": False,
+            "exact_name_match": False,
+            "ignore_accent": False,
+            "is_watched": False,
+            "player_name": player_name,
+        }
+        resp = await self._client.post("/get_players_history", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        result = data.get("result", {})
+        players = result.get("players", [])
+
+        search_results = []
+        for player_data in players:
+            # Get the most recent name (first in names array)
+            names = player_data.get("names", [])
+            display_name = names[0].get("name") if names else str(player_data.get("player_id", ""))
+            
+            search_results.append(
+                PlayerSearchResult(
+                    player_id=str(player_data.get("player_id", "")),
+                    display_name=display_name,
+                )
+            )
+
+        return search_results
+
+
+# --- Active search tracking -----------------------------------------------------
+
+# Track active searches per user to prevent too many concurrent interactions
+# Format: {user_id: [timestamp1, timestamp2, ...]}
+_active_searches: dict[int, list[datetime]] = defaultdict(list)
+MAX_CONCURRENT_SEARCHES = 3  # Maximum number of active searches per user
+SEARCH_TIMEOUT_MINUTES = 10  # Consider searches stale after this time
+
+
+def _cleanup_stale_searches() -> None:
+    """Remove stale search entries older than SEARCH_TIMEOUT_MINUTES."""
+    cutoff = datetime.now(UTC) - timedelta(minutes=SEARCH_TIMEOUT_MINUTES)
+    for user_id in list(_active_searches.keys()):
+        _active_searches[user_id] = [
+            ts for ts in _active_searches[user_id] if ts > cutoff
+        ]
+        if not _active_searches[user_id]:
+            del _active_searches[user_id]
+
+
+def _register_search(user_id: int) -> bool:
+    """
+    Register a new search for a user.
+    Returns True if allowed, False if user has too many active searches.
+    """
+    _cleanup_stale_searches()
+    active_count = len(_active_searches[user_id])
+    if active_count >= MAX_CONCURRENT_SEARCHES:
+        return False
+    _active_searches[user_id].append(datetime.now(UTC))
+    return True
+
+
+def _unregister_search(user_id: int) -> None:
+    """Remove the most recent search entry for a user."""
+    if user_id in _active_searches and _active_searches[user_id]:
+        _active_searches[user_id].pop(0)
+        if not _active_searches[user_id]:
+            del _active_searches[user_id]
+
 
 # --- Discord UI: modal & view ---------------------------------------------------
 
 VIP_DAYS = 10
 
 
+async def _send_response_or_followup(
+    interaction: discord.Interaction,
+    content: str,
+    ephemeral: bool = True,
+) -> None:
+    """Helper to send message via response or followup depending on interaction state."""
+    if interaction.response.is_done():
+        await interaction.followup.send(content, ephemeral=ephemeral)
+    else:
+        await interaction.response.send_message(content, ephemeral=ephemeral)
+
+
+async def process_vip_reward(
+    interaction: discord.Interaction,
+    api_client: ApiClient,
+    player: Player,
+    user: discord.User | discord.Member,
+) -> None:
+    """
+    Process the VIP reward for a selected player. This function handles all the logic
+    after a player has been selected (either from search or direct ID).
+    """
+    # First check: user must have the Hell Let Loose role on Discord
+    if HLL_ROLE_ID is not None and isinstance(user, discord.Member):
+        has_hll_role = any(role.id == HLL_ROLE_ID for role in user.roles)
+        if not has_hll_role:
+            await _send_response_or_followup(
+                interaction,
+                "Pro vyzvednutí této odměny potřebuješ mít na Discordu roli **Hell Let Loose**.\n"
+                "Můžeš si ji sám přidat v kanálu <id:customize> výběrem příslušné role.",
+            )
+            return
+
+    # Local check: has this Discord ID already claimed?
+    if has_claimed(user.id):
+        await _send_response_or_followup(
+            interaction,
+            "Tento Discord účet už si jednorázovou **vánoční VIP odměnu** vybral. 🎄\n"
+            "Díky, že u nás hraješ, a přejeme veselé Vánoce & šťastný nový rok 2026!",
+        )
+        return
+
+    # Check if this game/player ID has already been used from another Discord account
+    if is_player_claimed(player.player_id, user.id):
+        await _send_response_or_followup(
+            interaction,
+            "Tento **herní účet** už využil vánoční VIP odměnu z **jiného Discord účtu**.\n"
+            "Každý herní účet může odměnu čerpat jen jednou.",
+        )
+        return
+
+    # Determine VIP extension logic
+    vip_for_server = next(
+        (v for v in player.vips if v.get("server_number") == SERVER_NUMBER),
+        None,
+    )
+
+    add_vip_needed = True
+    new_expiration: Optional[datetime] = None
+
+    if player.is_vip and vip_for_server:
+        current_exp_str = vip_for_server.get("expiration")
+        if current_exp_str == INFINITE_VIP_DATE:
+            add_vip_needed = False
+        else:
+            base_dt = datetime.fromisoformat(current_exp_str.replace("Z", "+00:00"))
+            new_expiration = base_dt + timedelta(days=VIP_DAYS)
+    else:
+        # Not VIP (or no record for this server): start counting from now
+        new_expiration = datetime.now(UTC) + timedelta(days=VIP_DAYS)
+
+    # Link Discord ID on the remote side (edit_player_account)
+    try:
+        await api_client.edit_player_account(player, user.id)
+    except httpx.HTTPError as exc:
+        await _send_response_or_followup(
+            interaction,
+            "Našli jsme tvůj herní profil, ale nepodařilo se ho propojit s tvým Discord účtem.\n"
+            "Zkus to prosím za chvíli znovu, nebo kontaktuj administrátora.",
+        )
+        await send_log_message(
+            interaction.client,
+            f"❌ Chyba API při `edit_player_account` pro herní ID `{player.player_id}` "
+            f"od {user.mention} (`{user.id}`): `{exc}`",
+        )
+        return
+
+    vip_was_added = False
+    if add_vip_needed and new_expiration is not None:
+        try:
+            await api_client.add_vip(player, new_expiration)
+            vip_was_added = True
+        except httpx.HTTPError as exc:
+            await _send_response_or_followup(
+                interaction,
+                "Tvůj účet jsme úspěšně propojili, ale při udělování/ prodlužování VIP "
+                "nastala chyba v herní API.\n"
+                "Prosím kontaktuj administrátora, ať ti VIP dořeší ručně.",
+            )
+            await send_log_message(
+                interaction.client,
+                f"❌ Chyba API při `add_vip` pro herní ID `{player.player_id}` "
+                f"od {user.mention} (`{user.id}`): `{exc}`",
+            )
+            return
+
+    # Record locally so we don't process this Discord ID or player again
+    record_claim(user.id, player.player_id)
+
+    # Log successful claim to a dedicated channel, if configured
+    url = f"{BASE_URL}/records/players/{player.player_id}" if BASE_URL else f"(BASE_URL nedefinováno) `{player.player_id}`"
+    await send_log_message(
+        interaction.client,
+        f"✅ Nové úspěšné vyzvednutí VIP:\n"
+        f"- Herní ID: {url}\n"
+        f"- Discord účet: {user.mention} (`{user.id}`)",
+        suppress_embeds=True,
+    )
+
+    if not add_vip_needed:
+        msg = (
+            f"Tvůj Discord účet je nyní propojený s herním účtem `{player.display_name}`.\n"
+            "Na tomto serveru už máš **trvalé VIP**, proto se ti nepočítají žádné další dny.\n\n"
+            "Děkujeme, že u nás hraješ, a přejeme ti **veselé Vánoce & šťastný nový rok 2026! 🎄**"
+        )
+    elif vip_was_added and player.is_vip:
+        ts = (
+            f"<t:{int(new_expiration.timestamp())}:F>"
+            if new_expiration is not None
+            else "neznámé datum"
+        )
+        msg = (
+            f"Tvůj Discord účet je nyní propojený s herním účtem `{player.display_name}`.\n"
+            f"Tvé VIP na tomto serveru bylo **prodlouženo o {VIP_DAYS} dní** "
+            f"(nové vypršení: {ts}).\n\n"
+            "Děkujeme, že u nás hraješ, a přejeme ti **veselé Vánoce & šťastný nový rok 2026! 🎄**"
+        )
+    else:
+        ts = (
+            f"<t:{int(new_expiration.timestamp())}:F>"
+            if new_expiration is not None
+            else "neznámé datum"
+        )
+        msg = (
+            f"Tvůj Discord účet je nyní propojený s herním účtem `{player.display_name}`.\n"
+            f"Získáváš **{VIP_DAYS} dní VIP** "
+            f"(vypršení: {ts}).\n\n"
+            "Děkujeme, že u nás hraješ, a přejeme ti **veselé Vánoce & šťastný nový rok 2026! 🎄**"
+        )
+
+    await _send_response_or_followup(interaction, msg)
+
+
 class VipClaimModal(discord.ui.Modal, title="Vánoční VIP odměna"):
-    game_id: discord.ui.TextInput = discord.ui.TextInput(
-        label="Herní ID",
-        placeholder="Zadej svoje herní ID (HLL -> Settings - text vpravo nahoře)",
-        min_length=1,
+    player_name: discord.ui.TextInput = discord.ui.TextInput(
+        label="Jméno hráče",
+        placeholder="Zadej alespoň 2 znaky jména hráče",
+        min_length=2,
         max_length=64,
     )
 
@@ -251,35 +488,30 @@ class VipClaimModal(discord.ui.Modal, title="Vánoční VIP odměna"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         user = interaction.user
+        player_name = str(self.player_name.value).strip()
 
-        # First check: user must have the Hell Let Loose role on Discord
-        if HLL_ROLE_ID is not None and isinstance(user, discord.Member):
-            has_hll_role = any(role.id == HLL_ROLE_ID for role in user.roles)
-            if not has_hll_role:
-                await interaction.response.send_message(
-                    "Pro vyzvednutí této odměny potřebuješ mít na Discordu roli **Hell Let Loose**.\n"
-                    "Můžeš si ji sám přidat v kanálu <id:customize> výběrem příslušné role.",
-                    ephemeral=True,
-                )
-                return
-
-        # Local check: has this Discord ID already claimed?
-        if has_claimed(user.id):
+        if len(player_name) < 2:
             await interaction.response.send_message(
-                "Tento Discord účet už si jednorázovou **vánoční VIP odměnu** vybral. 🎄\n"
-                "Díky, že u nás hraješ, a přejeme veselé Vánoce & šťastný nový rok 2026!",
+                "Prosím zadej alespoň 2 znaky pro vyhledávání.",
                 ephemeral=True,
             )
             return
 
-        # Look up player via remote API
-        game_id = str(self.game_id.value).strip()
+        # Check if user has too many active searches
+        if not _register_search(user.id):
+            await interaction.response.send_message(
+                f"Máš příliš mnoho aktivních vyhledávání (maximum {MAX_CONCURRENT_SEARCHES}).\n"
+                "Počkej prosím, až některé z nich vyprší, nebo je dokonči/zruš.",
+                ephemeral=True,
+            )
+            return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         try:
-            player = await self.api_client.fetch_player_by_game_id(game_id)
+            search_results = await self.api_client.search_players(player_name)
         except httpx.HTTPError as exc:
+            _unregister_search(user.id)  # Clean up on error
             await interaction.followup.send(
                 "Omlouváme se, při komunikaci s herní API nastala chyba.\n"
                 "Zkus to prosím za chvíli znovu, nebo kontaktuj administrátora.",
@@ -287,128 +519,147 @@ class VipClaimModal(discord.ui.Modal, title="Vánoční VIP odměna"):
             )
             await send_log_message(
                 interaction.client,
-                f"❌ Chyba API při `get_player_profile` pro herní ID `{game_id}` "
+                f"❌ Chyba API při `get_players_history` pro jméno `{player_name}` "
                 f"od {user.mention} (`{user.id}`): `{exc}`",
             )
             return
 
-        if player is None:
+        if not search_results:
+            _unregister_search(user.id)  # Clean up when no results
             await interaction.followup.send(
-                "Pro zadané **herní ID** jsme nenašli žádného hráče.\n"
-                "Nejprve se prosím alespoň jednou připoj na náš server a pak to zkus znovu.",
+                f"Pro jméno **{player_name}** jsme nenašli žádného hráče.\n"
+                "Zkus zadat jiné jméno nebo se ujisti, že se hráč alespoň jednou připojil na server.",
                 ephemeral=True,
             )
             return
 
-        # Check if this game/player ID has already been used from another Discord account
-        if is_player_claimed(player.player_id, user.id):
-            await interaction.followup.send(
-                "Tento **herní účet** už využil vánoční VIP odměnu z **jiného Discord účtu**.\n"
-                "Každý herní účet může odměnu čerpat jen jednou.",
-                ephemeral=True,
-            )
-            return
+        # Always show select menu for confirmation (even for single result)
+        view = PlayerSelectView(self.api_client, search_results, user, user.id)
 
-        # Determine VIP extension logic
-        vip_for_server = next(
-            (v for v in player.vips if v.get("server_number") == SERVER_NUMBER),
-            None,
+        result_text = "hráče" if len(search_results) == 1 else "hráčů"
+        await interaction.followup.send(
+            f"Našli jsme **{len(search_results)}** {result_text} s jménem obsahujícím **{player_name}**.\n"
+            "Vyber prosím svůj účet ze seznamu:",
+            view=view,
+            ephemeral=True,
         )
 
-        add_vip_needed = True
-        new_expiration: Optional[datetime] = None
 
-        if player.is_vip and vip_for_server:
-            current_exp_str = vip_for_server.get("expiration")
-            if current_exp_str == INFINITE_VIP_DATE:
-                add_vip_needed = False
-            else:
-                base_dt = datetime.fromisoformat(current_exp_str.replace("Z", "+00:00"))
-                new_expiration = base_dt + timedelta(days=VIP_DAYS)
-        else:
-            # Not VIP (or no record for this server): start counting from now
-            new_expiration = datetime.now(UTC) + timedelta(days=VIP_DAYS)
+class PlayerSelect(discord.ui.Select):
+    def __init__(self, api_client: ApiClient, search_results: list[PlayerSearchResult], user: discord.User | discord.Member):
+        options = []
+        for result in search_results[:25]:  # Discord limit is 25 options
+            # Truncate display name if too long (Discord limit is 100 chars for label)
+            label = result.display_name[:100]
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    value=result.player_id,
+                    description=f"ID: {result.player_id[:50]}",  # Description limit is 100 chars
+                )
+            )
 
-        # Link Discord ID on the remote side (edit_player_account)
+        super().__init__(
+            placeholder="Vyber hráče ze seznamu...",
+            options=options,
+        )
+        self.api_client = api_client
+        self.user = user
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message(
+                "Tento výběr není pro tebe určený.",
+                ephemeral=True,
+            )
+            return
+
+        selected_player_id = self.values[0]
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
         try:
-            await self.api_client.edit_player_account(player, user.id)
+            player = await self.api_client.fetch_player_by_game_id(selected_player_id)
         except httpx.HTTPError as exc:
             await interaction.followup.send(
-                "Našli jsme tvůj herní profil, ale nepodařilo se ho propojit s tvým Discord účtem.\n"
+                "Při načítání profilu hráče nastala chyba.\n"
                 "Zkus to prosím za chvíli znovu, nebo kontaktuj administrátora.",
                 ephemeral=True,
             )
             await send_log_message(
                 interaction.client,
-                f"❌ Chyba API při `edit_player_account` pro herní ID `{player.player_id}` "
-                f"od {user.mention} (`{user.id}`): `{exc}`",
+                f"❌ Chyba API při `get_player_profile` pro player_id `{selected_player_id}` "
+                f"od {interaction.user.mention} (`{interaction.user.id}`): `{exc}`",
             )
             return
 
-        vip_was_added = False
-        if add_vip_needed and new_expiration is not None:
-            try:
-                await self.api_client.add_vip(player, new_expiration)
-                vip_was_added = True
-            except httpx.HTTPError as exc:
-                await interaction.followup.send(
-                    "Tvůj účet jsme úspěšně propojili, ale při udělování/ prodlužování VIP "
-                    "nastala chyba v herní API.\n"
-                    "Prosím kontaktuj administrátora, ať ti VIP dořeší ručně.",
-                    ephemeral=True,
-                )
-                await send_log_message(
-                    interaction.client,
-                    f"❌ Chyba API při `add_vip` pro herní ID `{player.player_id}` "
-                    f"od {user.mention} (`{user.id}`): `{exc}`",
-                )
-                return
+        if player is None:
+            await interaction.followup.send(
+                "Nepodařilo se načíst profil vybraného hráče.\n"
+                "Zkus to prosím za chvíli znovu.",
+                ephemeral=True,
+            )
+            return
 
-        # Record locally so we don't process this Discord ID or player again
-        record_claim(user.id, player.player_id)
+        # Process VIP reward
+        await process_vip_reward(interaction, self.api_client, player, self.user)
+        
+        # Unregister search when flow completes
+        _unregister_search(self.user.id)
 
-        # Log successful claim to a dedicated channel, if configured
-        url = f"{BASE_URL}/records/players/{player.player_id}" if BASE_URL else f"(BASE_URL nedefinováno) `{player.player_id}`"
-        await send_log_message(
-            interaction.client,
-            f"✅ Nové úspěšné vyzvednutí VIP:\n"
-            f"- Herní ID: {url}\n"
-            f"- Discord účet: {user.mention} (`{user.id}`)",
-            suppress_embeds=True,
+
+class PlayerSelectView(discord.ui.View):
+    def __init__(self, api_client: ApiClient, search_results: list[PlayerSearchResult], user: discord.User | discord.Member, user_id: int):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.api_client = api_client
+        self.user = user
+        self.user_id = user_id
+        self.add_item(PlayerSelect(api_client, search_results, user))
+
+    async def on_timeout(self) -> None:
+        """Called when the view times out. Clean up the search registration."""
+        _unregister_search(self.user_id)
+        # Note: We can't send a message here as the interaction is expired
+        # The view will automatically become non-interactive
+
+    @discord.ui.button(label="Hledat znovu", style=discord.ButtonStyle.secondary, row=1)
+    async def search_again_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # type: ignore[override]
+    ) -> None:
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message(
+                "Toto tlačítko není pro tebe určené.",
+                ephemeral=True,
+            )
+            return
+
+        # Unregister current search before opening new one
+        _unregister_search(self.user_id)
+        # Open the modal again for a new search
+        await interaction.response.send_modal(VipClaimModal(self.api_client))
+
+    @discord.ui.button(label="Zrušit", style=discord.ButtonStyle.danger, row=1)
+    async def cancel_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # type: ignore[override]
+    ) -> None:
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message(
+                "Toto tlačítko není pro tebe určené.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "Vyhledávání bylo zrušeno.",
+            ephemeral=True,
         )
-
-        if not add_vip_needed:
-            msg = (
-                f"Tvůj Discord účet je nyní propojený s herním účtem `{player.display_name}`.\n"
-                "Na tomto serveru už máš **trvalé VIP**, proto se ti nepočítají žádné další dny.\n\n"
-                "Děkujeme, že u nás hraješ, a přejeme ti **veselé Vánoce & šťastný nový rok 2026! 🎄**"
-            )
-        elif vip_was_added and player.is_vip:
-            ts = (
-                f"<t:{int(new_expiration.timestamp())}:F>"
-                if new_expiration is not None
-                else "neznámé datum"
-            )
-            msg = (
-                f"Tvůj Discord účet je nyní propojený s herním účtem `{player.display_name}`.\n"
-                f"Tvé VIP na tomto serveru bylo **prodlouženo o {VIP_DAYS} dní** "
-                f"(nové vypršení: {ts}).\n\n"
-                "Děkujeme, že u nás hraješ, a přejeme ti **veselé Vánoce & šťastný nový rok 2026! 🎄**"
-            )
-        else:
-            ts = (
-                f"<t:{int(new_expiration.timestamp())}:F>"
-                if new_expiration is not None
-                else "neznámé datum"
-            )
-            msg = (
-                f"Tvůj Discord účet je nyní propojený s herním účtem `{player.display_name}`.\n"
-                f"Získáváš **{VIP_DAYS} dní VIP** "
-                f"(vypršení: {ts}).\n\n"
-                "Děkujeme, že u nás hraješ, a přejeme ti **veselé Vánoce & šťastný nový rok 2026! 🎄**"
-            )
-
-        await interaction.followup.send(msg, ephemeral=True)
+        # Unregister search when user cancels
+        _unregister_search(self.user_id)
+        self.stop()
 
 
 class VipClaimView(discord.ui.View):
