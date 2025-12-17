@@ -112,6 +112,30 @@ def record_claim(discord_id: int, player_id: str) -> None:
         conn.close()
 
 
+# --- Logging helpers ------------------------------------------------------------
+
+
+async def send_log_message(
+    client: discord.Client,
+    content: str,
+    suppress_embeds: bool = False,
+) -> None:
+    """
+    Send a message to the configured log channel, if any.
+    Fail-closed: logging problems must never affect user flow.
+    """
+    if VIP_LOG_CHANNEL_ID is None:
+        return
+
+    try:
+        channel = client.get_channel(VIP_LOG_CHANNEL_ID)
+        if isinstance(channel, discord.TextChannel):
+            await channel.send(content, suppress_embeds=suppress_embeds)
+    except Exception:
+        # Never crash on logging errors
+        pass
+
+
 # --- Remote API client ----------------------------------------------------------
 
 @dataclass
@@ -255,11 +279,16 @@ class VipClaimModal(discord.ui.Modal, title="Vánoční VIP odměna"):
 
         try:
             player = await self.api_client.fetch_player_by_game_id(game_id)
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
             await interaction.followup.send(
                 "Omlouváme se, při komunikaci s herní API nastala chyba.\n"
                 "Zkus to prosím za chvíli znovu, nebo kontaktuj administrátora.",
                 ephemeral=True,
+            )
+            await send_log_message(
+                interaction.client,
+                f"❌ Chyba API při `get_player_profile` pro herní ID `{game_id}` "
+                f"od {user.mention} (`{user.id}`): `{exc}`",
             )
             return
 
@@ -303,11 +332,16 @@ class VipClaimModal(discord.ui.Modal, title="Vánoční VIP odměna"):
         # Link Discord ID on the remote side (edit_player_account)
         try:
             await self.api_client.edit_player_account(player, user.id)
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
             await interaction.followup.send(
                 "Našli jsme tvůj herní profil, ale nepodařilo se ho propojit s tvým Discord účtem.\n"
                 "Zkus to prosím za chvíli znovu, nebo kontaktuj administrátora.",
                 ephemeral=True,
+            )
+            await send_log_message(
+                interaction.client,
+                f"❌ Chyba API při `edit_player_account` pro herní ID `{player.player_id}` "
+                f"od {user.mention} (`{user.id}`): `{exc}`",
             )
             return
 
@@ -316,12 +350,17 @@ class VipClaimModal(discord.ui.Modal, title="Vánoční VIP odměna"):
             try:
                 await self.api_client.add_vip(player, new_expiration)
                 vip_was_added = True
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
                 await interaction.followup.send(
                     "Tvůj účet jsme úspěšně propojili, ale při udělování/ prodlužování VIP "
                     "nastala chyba v herní API.\n"
                     "Prosím kontaktuj administrátora, ať ti VIP dořeší ručně.",
                     ephemeral=True,
+                )
+                await send_log_message(
+                    interaction.client,
+                    f"❌ Chyba API při `add_vip` pro herní ID `{player.player_id}` "
+                    f"od {user.mention} (`{user.id}`): `{exc}`",
                 )
                 return
 
@@ -329,20 +368,14 @@ class VipClaimModal(discord.ui.Modal, title="Vánoční VIP odměna"):
         record_claim(user.id, player.player_id)
 
         # Log successful claim to a dedicated channel, if configured
-        if VIP_LOG_CHANNEL_ID is not None:
-            channel = interaction.client.get_channel(VIP_LOG_CHANNEL_ID)
-            if isinstance(channel, discord.TextChannel):
-                try:
-                    url = f"{BASE_URL}/records/players/{player.player_id}"
-                    await channel.send(
-                        f"✅ Nové úspěšné vyzvednutí VIP:\n"
-                        f"- Herní ID: {url} (`{player.player_id}`)\n"
-                        f"- Discord účet: {user.mention} (`{user.id}`)",
-                        suppress_embeds=True,
-                    )
-                except Exception:
-                    # Logging should never blok or break the user flow
-                    pass
+        url = f"{BASE_URL}/records/players/{player.player_id}" if BASE_URL else f"(BASE_URL nedefinováno) `{player.player_id}`"
+        await send_log_message(
+            interaction.client,
+            f"✅ Nové úspěšné vyzvednutí VIP:\n"
+            f"- Herní ID: {url}\n"
+            f"- Discord účet: {user.mention} (`{user.id}`)",
+            suppress_embeds=True,
+        )
 
         if not add_vip_needed:
             msg = (
@@ -394,6 +427,13 @@ class VipClaimView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,  # type: ignore[override]
     ) -> None:
+        # Log every button click
+        await send_log_message(
+            interaction.client,
+            f"🔔 Kliknutí na VIP tlačítko od {interaction.user.mention} "
+            f"(`{interaction.user.id}`) v kanálu <#{interaction.channel_id}>.",
+        )
+
         # Absolutely first check: this Discord user must not have claimed VIP before.
         if has_claimed(interaction.user.id):
             await interaction.response.send_message(
