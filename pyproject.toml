@@ -1,0 +1,11 @@
+[project]
+name = "vlk-discord-bot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "discord-py>=2.6.4",
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.1",
+]

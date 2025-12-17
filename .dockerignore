@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.log
+.venv/
+.git/
+.gitignore
+.cursor/
+terminals/
+claims.sqlite3
+*.sqlite3
+uv.lock.bak
+
+

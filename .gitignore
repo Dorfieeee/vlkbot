@@ -1,0 +1,14 @@
+.venv
+api_examples
+.env
+__pycache__/
+*.py[cod]
+*.log
+*.sqlite3
+claims.sqlite3
+.DS_Store
+.idea/
+.vscode/
+.cursor/
+terminals/
+
