@@ -37,6 +37,6 @@ COPY . .
 # Example (using a local .env file):
 #   docker run --env-file .env ghcr.io/your-org/vlk-discord-bot:latest
 
-CMD ["python", "main.py"]
+CMD ["python", "run.py", "prod"]
 
 

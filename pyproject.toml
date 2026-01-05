@@ -9,3 +9,8 @@ dependencies = [
     "httpx>=0.27.0",
     "python-dotenv>=1.0.1",
 ]
+
+# For npm-like scripts, use one of these methods:
+# 1. Makefile: make dev, make prod
+# 2. Python script: python run.py dev, python run.py prod
+# 3. Direct: ENVIRONMENT=dev python main.py, ENVIRONMENT=prod python main.py

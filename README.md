@@ -19,7 +19,6 @@ DISCORD_TOKEN=your_discord_bot_token_here
 API_BASE_URL=https://your-game-api.example.com
 API_BEARER_TOKEN=your_api_bearer_token_here
 # Optional: restrict VIP button usage to a specific channel
-VIP_CHANNEL_ID=123456789012345678
 ```
 
 ### Running the bot

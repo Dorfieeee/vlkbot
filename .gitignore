@@ -1,6 +1,7 @@
 .venv
 api_examples
 .env
+.env.dev
 __pycache__/
 *.py[cod]
 *.log
