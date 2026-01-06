@@ -3,8 +3,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from api_client import ApiClient
-from config import API_BASE_URL, API_BEARER_TOKEN, DISCORD_TOKEN, GUILD_ID
+from api_client import get_api_client
+from config import DISCORD_TOKEN, GUILD_ID
 from database import init_db, set_server_channel_id
 from views import MemberManagementView, VipClaimView
 from views.vip_claim import ThreadCloseView
@@ -19,10 +19,6 @@ intents.members = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-# Initialize API client
-api_client = ApiClient(API_BASE_URL, API_BEARER_TOKEN)
-
 
 # --- Event handlers ---------------------------------------------------------
 
@@ -42,8 +38,8 @@ async def setup_hook() -> None:  # type: ignore[override]
     Register persistent views here so the button continues working after restarts.
     """
     init_db()
-    bot.add_view(VipClaimView(api_client))
-    bot.add_view(MemberManagementView(api_client))
+    bot.add_view(VipClaimView())
+    bot.add_view(MemberManagementView())
     bot.add_view(ThreadCloseView())  # Register thread close button for VIP help threads
 
     # Reset & sync application (slash) commands on every startup.
@@ -68,7 +64,7 @@ async def post_vip_claim_app(interaction: discord.Interaction) -> None:
     Admin-only slash command to post the VIP claim message in the current channel.
     Run this once in your dedicated VIP channel.
     """
-    view = VipClaimView(api_client)
+    view = VipClaimView()
     await interaction.response.send_message(
         "# ⭐ VIP GIVEAWAY ⭐\n"
         "Klikni na tlačítko níže, najdi se podle HLL jména a vyzvedni si **10 dní VIP** na VLK serveru.\n"
@@ -127,7 +123,7 @@ async def setup_server_status(
     guild=discord.Object(id=GUILD_ID),
 )
 async def post_member_management(interaction: discord.Interaction):
-    view = MemberManagementView(api_client)
+    view = MemberManagementView()
     await interaction.response.send_message("**Správa členství** (pouze admin)", view=view)
 
 # --- Tasks ------------------------------------------------------------------
@@ -142,6 +138,7 @@ async def server_status_task() -> None:
     channel = guild.get_channel(channel_id) if channel_id else None
 
     try:
+        api_client = get_api_client()
         info = await api_client.get_public_info()
         players = info["player_count"]
         server_name = f"VLK #1 @ {info["current_map"]["map"]["map"]["shortname"]}"
@@ -177,11 +174,6 @@ async def server_status_task() -> None:
 def get_bot() -> commands.Bot:
     """Return the bot instance."""
     return bot
-
-
-def get_api_client() -> ApiClient:
-    """Return the API client instance."""
-    return api_client
 
 
 def get_token() -> str:

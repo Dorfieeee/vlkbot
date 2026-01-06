@@ -4,6 +4,7 @@ from typing import Optional
 
 import httpx
 
+from config import API_BASE_URL, API_BEARER_TOKEN
 from models import Player, PlayerSearchResult
 
 
@@ -130,3 +131,9 @@ class ApiClient:
         resp = await self._client.get("/get_public_info")
         resp.raise_for_status()
         return resp.json()["result"]
+
+# Initialize API client
+api_client = ApiClient(API_BASE_URL, API_BEARER_TOKEN)
+
+def get_api_client():
+    return api_client

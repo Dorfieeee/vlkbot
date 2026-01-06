@@ -1,5 +1,4 @@
 """Utility functions for the bot."""
-from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Optional
 
@@ -9,8 +8,6 @@ import httpx
 from config import (
     BASE_URL,
     HLL_ROLE_ID,
-    MAX_CONCURRENT_SEARCHES,
-    SEARCH_TIMEOUT_MINUTES,
     SERVER_NUMBER,
     FREE_VIP_REWARD_LENGTH,
     LOG_CHANNEL_ID,
@@ -41,46 +38,6 @@ async def send_log_message(
     except Exception:
         # Never crash on logging errors
         pass
-
-
-# --- Active search tracking -------------------------------------------------
-
-
-# Track active searches per user to prevent too many concurrent interactions
-# Format: {user_id: [timestamp1, timestamp2, ...]}
-_active_searches: dict[int, list[datetime]] = defaultdict(list)
-
-
-def _cleanup_stale_searches() -> None:
-    """Remove stale search entries older than SEARCH_TIMEOUT_MINUTES."""
-    cutoff = datetime.now(UTC) - timedelta(minutes=SEARCH_TIMEOUT_MINUTES)
-    for user_id in list(_active_searches.keys()):
-        _active_searches[user_id] = [
-            ts for ts in _active_searches[user_id] if ts > cutoff
-        ]
-        if not _active_searches[user_id]:
-            del _active_searches[user_id]
-
-
-def register_search(user_id: int) -> bool:
-    """
-    Register a new search for a user.
-    Returns True if allowed, False if user has too many active searches.
-    """
-    _cleanup_stale_searches()
-    active_count = len(_active_searches[user_id])
-    if active_count >= MAX_CONCURRENT_SEARCHES:
-        return False
-    _active_searches[user_id].append(datetime.now(UTC))
-    return True
-
-
-def unregister_search(user_id: int) -> None:
-    """Remove the most recent search entry for a user."""
-    if user_id in _active_searches and _active_searches[user_id]:
-        _active_searches[user_id].pop(0)
-        if not _active_searches[user_id]:
-            del _active_searches[user_id]
 
 
 # --- Interaction helpers ----------------------------------------------------

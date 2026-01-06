@@ -1,7 +1,8 @@
 """Entry point for the VIP Discord bot."""
 import asyncio
 
-from bot import get_api_client, get_bot, get_token
+from api_client import get_api_client
+from bot import get_bot, get_token
 
 
 async def main() -> None:

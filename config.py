@@ -34,7 +34,7 @@ if ENVIRONMENT == "prod":
         GUILD_ID,
         HLL_ROLE_ID,
         LOG_CHANNEL_ID,
-        VIP_CLAIM_SUPPORT_ROLE_ID,
+        SUPPORT_ROLE_ID,
         MEMBER_ROLE_ID,
         COMMUNITY_ROLE_ID,
     )
@@ -43,7 +43,7 @@ else:
         GUILD_ID,
         HLL_ROLE_ID,
         LOG_CHANNEL_ID,
-        VIP_CLAIM_SUPPORT_ROLE_ID,
+        SUPPORT_ROLE_ID,
         MEMBER_ROLE_ID,
         COMMUNITY_ROLE_ID,
     )

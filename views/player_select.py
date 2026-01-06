@@ -2,15 +2,16 @@
 import discord
 import httpx
 
-from api_client import ApiClient
-from models import PlayerSearchResult
-from utils import process_vip_reward, send_log_message, unregister_search
+from api_client import get_api_client
+from models import Player, PlayerSearchResult
+from utils import send_log_message
 
 
 class PlayerSelect(discord.ui.Select):
     """Dropdown menu for selecting a player from search results."""
 
-    def __init__(self, api_client: ApiClient, search_results: list[PlayerSearchResult], user: discord.User | discord.Member):
+    def __init__(self, search_results: list[PlayerSearchResult]):
+        self.api_client = get_api_client()
         options = []
         for result in search_results[:25]:  # Discord limit is 25 options
             # Truncate display name if too long (Discord limit is 100 chars for label)
@@ -27,18 +28,9 @@ class PlayerSelect(discord.ui.Select):
             placeholder="Vyber hráče ze seznamu...",
             options=options,
         )
-        self.api_client = api_client
-        self.user = user
 
     async def callback(self, interaction: discord.Interaction) -> None:
         """Handle player selection from the dropdown."""
-        if interaction.user.id != self.user.id:
-            await interaction.response.send_message(
-                "Tento výběr není pro tebe určený.",
-                ephemeral=True,
-            )
-            return
-
         selected_player_id = self.values[0]
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -66,28 +58,22 @@ class PlayerSelect(discord.ui.Select):
             )
             return
 
-        # Process VIP reward
-        await process_vip_reward(interaction, self.api_client, player, self.user)
+        await self.handle_callback(interaction, player)
         
-        # Unregister search when flow completes
-        unregister_search(self.user.id)
+    async def handle_callback(interaction: discord.Interaction, player: Player):
+        '''To be overriden'''
+        interaction.response.send_message(
+            f"Selected player: {player}"
+            "Warning: This method should be overriden."
+        )
 
 
 class PlayerSelectView(discord.ui.View):
     """View containing player selection dropdown and action buttons."""
 
-    def __init__(self, api_client: ApiClient, search_results: list[PlayerSearchResult], user: discord.User | discord.Member, user_id: int):
-        super().__init__(timeout=300)  # 5 minute timeout
-        self.api_client = api_client
-        self.user = user
-        self.user_id = user_id
-        self.add_item(PlayerSelect(api_client, search_results, user))
-
-    async def on_timeout(self) -> None:
-        """Called when the view times out. Clean up the search registration."""
-        unregister_search(self.user_id)
-        # Note: We can't send a message here as the interaction is expired
-        # The view will automatically become non-interactive
+    def __init__(self):
+        super().__init__(timeout=180)  # 3 minute timeout
+        self.modal = None
 
     @discord.ui.button(label="Hledat znovu", style=discord.ButtonStyle.secondary, row=1)
     async def search_again_button(
@@ -96,20 +82,9 @@ class PlayerSelectView(discord.ui.View):
         button: discord.ui.Button,  # type: ignore[override]
     ) -> None:
         """Allow user to perform a new search."""
-        if interaction.user.id != self.user.id:
-            await interaction.response.send_message(
-                "Toto tlačítko není pro tebe určené.",
-                ephemeral=True,
-            )
-            return
 
-        # Import here to avoid circular import
-        from views.vip_claim import VipClaimModal
-
-        # Unregister current search before opening new one
-        unregister_search(self.user_id)
         # Open the modal again for a new search
-        await interaction.response.send_modal(VipClaimModal(self.api_client))
+        await interaction.response.send_modal(self.modal())
 
     @discord.ui.button(label="Zrušit", style=discord.ButtonStyle.danger, row=1)
     async def cancel_button(
@@ -118,18 +93,10 @@ class PlayerSelectView(discord.ui.View):
         button: discord.ui.Button,  # type: ignore[override]
     ) -> None:
         """Allow user to cancel the search."""
-        if interaction.user.id != self.user.id:
-            await interaction.response.send_message(
-                "Toto tlačítko není pro tebe určené.",
-                ephemeral=True,
-            )
-            return
 
         await interaction.response.send_message(
             "Vyhledávání bylo zrušeno.",
             ephemeral=True,
         )
-        # Unregister search when user cancels
-        unregister_search(self.user_id)
         self.stop()
 

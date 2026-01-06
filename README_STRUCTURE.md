@@ -59,7 +59,6 @@ vlk_discord_bot/
 
 ### `utils.py`
 - `send_log_message()`: Log to Discord channel
-- Search tracking: `register_search()`, `unregister_search()`
 - `send_response_or_followup()`: Smart interaction response
 - `process_vip_reward()`: Core VIP processing logic
 

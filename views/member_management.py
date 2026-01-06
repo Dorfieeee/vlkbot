@@ -1,140 +1,135 @@
 import discord
-from discord import ui, Interaction, SelectOption
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from discord import ui, Interaction
 
-from api_client import ApiClient
-from config import INFINITE_VIP_DATE, MEMBER_ROLE_ID, COMMUNITY_ROLE_ID
-from utils import send_log_message, send_response_or_followup
-from views.player_select import PlayerSelectView  # reuse existing
+from api_client import get_api_client
+from config import MEMBER_ROLE_ID, COMMUNITY_ROLE_ID
+from discord_config.dev import REKRUT_ROLE_ID
+from utils import send_log_message
+from views.user_select import PaginatedMemberSelect
+from views.vip_claim import GetPlayerProfileModal
 
 
 class MemberManagementView(ui.View):
-    def __init__(self, api_client: ApiClient):
+    def __init__(self):
         super().__init__(timeout=None)
-        self.api_client = api_client
+        self.api_client = get_api_client()
 
     @ui.button(label="Přidat člena", style=discord.ButtonStyle.green, custom_id="mm:add")
     async def add_member(self, interaction: Interaction, button: ui.Button):
-        modal = UserModal(self.api_client, mode="add")
-        await interaction.response.send_modal(modal)
+        await interaction.response.defer(ephemeral=True)
+
+        recruit_role = interaction.guild.get_role(REKRUT_ROLE_ID)
+        if not recruit_role:
+            try:
+                recruit_role = await interaction.guild.fetch_role(REKRUT_ROLE_ID)
+            except discord.NotFound:
+                await interaction.response.send_message("Rekrut role nebyla nalezena", ephemeral=True)
+
+        members = recruit_role.members
+        view = PaginatedMemberSelect(members=members, confirm_callback=self.promote_recruit)
+        await interaction.followup.send(
+            f"### [1/2] Discord Roles\n"
+            f"Našli jsme **{len(members)}** rekrutu.",
+            view=view,
+            ephemeral=True
+        )
 
     @ui.button(label="Odebrat člena", style=discord.ButtonStyle.red, custom_id="mm:remove")
     async def remove_member(self, interaction: Interaction, button: ui.Button):
-        modal = UserModal(self.api_client, mode="remove")
-        await interaction.response.send_modal(modal)
-
-
-class UserModal(ui.Modal):
-    def __init__(self, api_client: ApiClient, mode: str):
-        super().__init__(title="Správa členství")
-        self.api_client = api_client
-        self.mode = mode
-        self.user_input = ui.TextInput(
-            label="Discord uživatel (ID nebo @mention)",
-            placeholder="např. 123456789 nebo @Uživatel",
-            required=True,
-        )
-        self.add_item(self.user_input)
-
-    async def on_submit(self, interaction: Interaction):
         await interaction.response.defer(ephemeral=True)
 
-        # Extract user ID
-        text = self.user_input.value.strip()
-        if text.startswith(("<@", "<@!")) and text.endswith(">"):
-            text = text[2:-1].lstrip("!")  # Handles both <@id> and <@!id>
-        try:
-            target_id = int(text)
-        except ValueError:
-            await interaction.followup.send("Neplatné ID nebo mention.", ephemeral=True)
-            return
-
-        member = interaction.guild.get_member(target_id)
-        if not member:
+        member_role = interaction.guild.get_role(MEMBER_ROLE_ID)
+        if not member_role:
             try:
-                member = await interaction.guild.fetch_member(target_id)
+                member_role = await interaction.guild.fetch_role(MEMBER_ROLE_ID)
             except discord.NotFound:
-                await interaction.followup.send("Uživatel není na serveru.", ephemeral=True)
+                await interaction.response.send_message("Člen role nebyla nalezena", ephemeral=True)
                 return
-        print(member)
-        # Start player search
-        player_modal = PlayerNameModal(self.api_client, member.id, self.mode)
-        await player_modal.send(interaction)
 
+        members = member_role.members
+        view = PaginatedMemberSelect(members=members, confirm_callback=self.demote_member)
+        await interaction.followup.send(
+            f"Našli jsme **{len(members)}** člena.",
+            view=view,
+            ephemeral=True
+        )
 
-class PlayerNameModal(ui.Modal):
-    def __init__(self, api_client: ApiClient, discord_id: int, mode: str):
-        super().__init__(title="Hledání hráče")
-        self.api_client = api_client
-        self.discord_id = discord_id
-        self.mode = mode
-        self.name_input = ui.TextInput(label="Jméno hráče", placeholder="Zadej jméno")
-        self.add_item(self.name_input)
-
-    async def send(self, interaction: Interaction):
-        await interaction.followup.send("Zadej jméno hráče:", ephemeral=True)
-
-    async def on_submit(self, interaction: Interaction):
-        await interaction.response.defer(ephemeral=True)
-        name = self.name_input.value
-        results = await self.api_client.search_players(name)
-        if not results:
-            await interaction.followup.send("Žádný hráč nenalezen.", ephemeral=True)
-            return
-
-        options = [SelectOption(label=r.display_name[:100], value=r.player_id) for r in results[:25]]
-        view = PlayerSelectView(options, self.on_player_selected)
-        await interaction.followup.send("Vyber hráče:", view=view, ephemeral=True)
-
-    async def on_player_selected(self, select_inter: Interaction, player_id: str):
-        await select_inter.response.defer(ephemeral=True)
-        player = await self.api_client.fetch_player_by_game_id(player_id)
-        if not player:
-            await select_inter.followup.send("Hráč nenalezen.", ephemeral=True)
-            return
-
-        member = select_inter.guild.get_member(self.discord_id)
-        if not member:
-            await select_inter.followup.send("Uživatel není na serveru.", ephemeral=True)
-            return
-
+    async def promote_recruit(self, interaction: Interaction, selected_user: discord.Member):
+        """Promote a recruit to a full member."""
         try:
-            if self.mode == "add":
-                # Link + make member
-                updated_player = player._replace(
-                    account_discord_id=str(self.discord_id),
-                    account_is_member=True
-                )
-                await self.api_client.edit_player_account(updated_player)
-                infinite = datetime.strptime(INFINITE_VIP_DATE, "%Y-%m-%dT%H:%M:%S%z")
-                await self.api_client.add_vip(player, infinite)
+            # Check if user already has member role
+            member_role = interaction.guild.get_role(MEMBER_ROLE_ID)
+            if member_role in selected_user.roles:
+                await interaction.edit_original_response(f"{selected_user.mention} už je členem!", ephemeral=True, view=None)
+                return
 
-                await member.add_roles(discord.Object(id=MEMBER_ROLE_ID))
-                await member.remove_roles(discord.Object(id=COMMUNITY_ROLE_ID))
+            # Get player info - this might need to be expanded to ask for player name
+            # For now, assume we can find player by Discord ID or need additional input
+            # This is a simplified version - you might want to add a modal to ask for player name
 
-                log_msg = f"✅ Přidán člen: {member} → {player.display_name} ({player.player_id}) – nekonečné VIP"
-                msg = f"{member.mention} je nyní člen (nekonečné VIP)."
+            # For now, create a basic player link (this would need the actual player data)
+            # player = await self.api_client.fetch_player_by_discord_id(str(selected_user.id))
 
-            else:  # remove
-                if player.account_discord_id != str(self.discord_id):
-                    await select_inter.followup.send("Hráč není propojen s tímto Discordem.", ephemeral=True)
-                    return
+            # Since we don't have the player linking logic yet, let's implement the role changes first
+            recruit_role = interaction.guild.get_role(REKRUT_ROLE_ID)
 
-                updated_player = player._replace(account_is_member=False)
-                await self.api_client.edit_player_account(updated_player)
-                exp = datetime.now(ZoneInfo("UTC")) + timedelta(days=14)
-                await self.api_client.add_vip(player, exp)
+            # Add member role, remove recruit role
+            await selected_user.add_roles(discord.Object(id=MEMBER_ROLE_ID))
+            if recruit_role and recruit_role in selected_user.roles:
+                await selected_user.remove_roles(recruit_role)
 
-                await member.add_roles(discord.Object(id=COMMUNITY_ROLE_ID))
-                await member.remove_roles(discord.Object(id=MEMBER_ROLE_ID))
+            # Add infinite VIP if we had player data
+            # infinite = datetime.strptime(INFINITE_VIP_DATE, "%Y-%m-%dT%H:%M:%S%z")
+            # await self.api_client.add_vip(player, infinite)
 
-                log_msg = f"❌ Odebrán člen: {member} → {player.display_name} ({player.player_id}) – 14 dní VIP"
-                msg = f"{member.mention} byl odebrán z členství (14 dní VIP)."
+            # Send confirmation
+            log_msg = f"✅ Přidán člen: {selected_user} - základní členství"
 
-            await send_log_message(select_inter.client, log_msg)
-            await select_inter.followup.send(msg, ephemeral=True)
+            await send_log_message(interaction.client, log_msg)
+            await interaction.edit_original_response(
+                content=f"### [1/2] Discord Roles\n"
+                f"{selected_user.mention} je nyní člen!",
+                view=None
+            )
+            view = ui.View()
+            button = discord.ui.Button(label="Propojit s CRCON", style=discord.ButtonStyle.green, custom_id="mm:link_crcon")
+            button.callback = lambda interaction: interaction.response.send_modal(GetPlayerProfileModal(self.api_client))
+            view.add_item(button)
+            await interaction.followup.send(
+                f"### [2/2] Propojeni s CRCON\n"
+                f"Propoj hráče s CRCON profilem pomocí modálu níže.",
+                view=view,
+                ephemeral=True
+            )
 
         except Exception as e:
-            await send_log_message(select_inter.client, f"Chyba správy členství: {e}")
-            await select_inter.followup.send("Nastala chyba.", ephemeral=True)
+            await send_log_message(interaction.client, f"Chyba přidání člena: {e}")
+            await interaction.edit_original_response(content="Nastala chyba při přidávání člena.", view=None)
+
+    async def demote_member(self, interaction: Interaction, selected_user: discord.Member):
+        """Remove a member from member status."""
+        try:
+            # Check if user has member role
+            member_role = interaction.guild.get_role(MEMBER_ROLE_ID)
+            if member_role not in selected_user.roles:
+                await interaction.edit_original_response(f"{selected_user.mention} není členem!", ephemeral=True, view=None)
+                return
+
+            # Remove member role, add back to community
+            await selected_user.remove_roles(member_role)
+            await selected_user.add_roles(discord.Object(id=COMMUNITY_ROLE_ID))
+
+            # Add 14-day VIP if we had player data
+            # exp = datetime.now(ZoneInfo("UTC")) + timedelta(days=14)
+            # await self.api_client.add_vip(player, exp)
+
+            # Send confirmation
+            log_msg = f"❌ Odebrán člen: {selected_user} – 14 dní VIP"
+            msg = f"{selected_user.mention} byl odebrán z členství."
+
+            await send_log_message(interaction.client, log_msg)
+            await interaction.edit_original_response(msg, ephemeral=True, view=None)
+
+        except Exception as e:
+            await send_log_message(interaction.client, f"Chyba odebrání člena: {e}")
+            await interaction.edit_original_response("Nastala chyba při odebírání člena.", ephemeral=True, view=None)
