@@ -1,9 +1,10 @@
-"""Player selection view and dropdown for confirming player identity."""
+"""API_Player selection view and dropdown for confirming player identity."""
 import discord
 import httpx
 
 from api_client import get_api_client
-from models import Player, PlayerSearchResult
+from components.modals import SearchTypeSelectView
+from models import API_Player, PlayerSearchResult
 from utils import send_log_message
 
 
@@ -31,17 +32,17 @@ class PlayerSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         """Handle player selection from the dropdown."""
-        selected_player_id = self.values[0]
+        await interaction.response.defer(ephemeral=True)
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        selected_player_id = self.values[0]
 
         try:
             player = await self.api_client.fetch_player_by_game_id(selected_player_id)
         except httpx.HTTPError as exc:
-            await interaction.followup.send(
-                "Při načítání profilu hráče nastala chyba.\n"
+            await interaction.edit_original_response(
+                content="Při načítání profilu hráče nastala chyba.\n"
                 "Zkus to prosím za chvíli znovu, nebo kontaktuj administrátora.",
-                ephemeral=True,
+                view=None,
             )
             await send_log_message(
                 interaction.client,
@@ -51,21 +52,18 @@ class PlayerSelect(discord.ui.Select):
             return
 
         if player is None:
-            await interaction.followup.send(
-                "Nepodařilo se načíst profil vybraného hráče.\n"
+            await interaction.edit_original_response(
+                content="Nepodařilo se načíst profil vybraného hráče.\n"
                 "Zkus to prosím za chvíli znovu.",
-                ephemeral=True,
+                view=None,
             )
             return
 
         await self.handle_callback(interaction, player)
         
-    async def handle_callback(interaction: discord.Interaction, player: Player):
+    async def handle_callback(self, interaction: discord.Interaction, player: API_Player):
         '''To be overriden'''
-        interaction.response.send_message(
-            f"Selected player: {player}"
-            "Warning: This method should be overriden."
-        )
+        raise NotImplementedError("handle_callback was not implemented")
 
 
 class PlayerSelectView(discord.ui.View):
@@ -73,7 +71,7 @@ class PlayerSelectView(discord.ui.View):
 
     def __init__(self):
         super().__init__(timeout=180)  # 3 minute timeout
-        self.modal = None
+        self.modal = None  # set by parent (e.g. VipClaimPlayerSelectView)
 
     @discord.ui.button(label="Hledat znovu", style=discord.ButtonStyle.secondary, row=1)
     async def search_again_button(
@@ -83,8 +81,19 @@ class PlayerSelectView(discord.ui.View):
     ) -> None:
         """Allow user to perform a new search."""
 
-        # Open the modal again for a new search
-        await interaction.response.send_modal(self.modal())
+        # Disable current controls so the old select cannot be used again
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.edit_original_response(content=None, view=self)
+
+        # Show select view again for a new search
+        if self.modal is not None:
+            view = SearchTypeSelectView(modal_class=self.modal)
+            await interaction.edit_original_response(
+                content="Vyber způsob vyhledávání:",
+                view=view,
+            )
 
     @discord.ui.button(label="Zrušit", style=discord.ButtonStyle.danger, row=1)
     async def cancel_button(
@@ -94,9 +103,13 @@ class PlayerSelectView(discord.ui.View):
     ) -> None:
         """Allow user to cancel the search."""
 
-        await interaction.response.send_message(
-            "Vyhledávání bylo zrušeno.",
-            ephemeral=True,
-        )
+        # Disable all controls on the original message
+        for item in self.children:
+            item.disabled = True
+
+        await interaction.edit_original_response(view=self)
+
+        # Inform the user that the search was cancelled
+        await interaction.delete_original_response()
         self.stop()
 

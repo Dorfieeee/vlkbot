@@ -6,10 +6,10 @@ __pycache__/
 *.py[cod]
 *.log
 *.sqlite3
-claims.sqlite3
+db.sqlite3
 .DS_Store
 .idea/
 .vscode/
 .cursor/
 terminals/
-
+start.sh

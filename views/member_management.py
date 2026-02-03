@@ -5,8 +5,8 @@ from api_client import get_api_client
 from config import MEMBER_ROLE_ID, COMMUNITY_ROLE_ID
 from discord_config.dev import REKRUT_ROLE_ID
 from utils import send_log_message
+from components.modals import GetPlayerProfileModal, SearchTypeSelectView
 from views.user_select import PaginatedMemberSelect
-from views.vip_claim import GetPlayerProfileModal
 
 
 class MemberManagementView(ui.View):
@@ -62,25 +62,13 @@ class MemberManagementView(ui.View):
             if member_role in selected_user.roles:
                 await interaction.edit_original_response(f"{selected_user.mention} už je členem!", ephemeral=True, view=None)
                 return
-
-            # Get player info - this might need to be expanded to ask for player name
-            # For now, assume we can find player by Discord ID or need additional input
-            # This is a simplified version - you might want to add a modal to ask for player name
-
-            # For now, create a basic player link (this would need the actual player data)
-            # player = await self.api_client.fetch_player_by_discord_id(str(selected_user.id))
-
-            # Since we don't have the player linking logic yet, let's implement the role changes first
+                
             recruit_role = interaction.guild.get_role(REKRUT_ROLE_ID)
 
             # Add member role, remove recruit role
             await selected_user.add_roles(discord.Object(id=MEMBER_ROLE_ID))
             if recruit_role and recruit_role in selected_user.roles:
                 await selected_user.remove_roles(recruit_role)
-
-            # Add infinite VIP if we had player data
-            # infinite = datetime.strptime(INFINITE_VIP_DATE, "%Y-%m-%dT%H:%M:%S%z")
-            # await self.api_client.add_vip(player, infinite)
 
             # Send confirmation
             log_msg = f"✅ Přidán člen: {selected_user} - základní členství"
@@ -93,7 +81,14 @@ class MemberManagementView(ui.View):
             )
             view = ui.View()
             button = discord.ui.Button(label="Propojit s CRCON", style=discord.ButtonStyle.green, custom_id="mm:link_crcon")
-            button.callback = lambda interaction: interaction.response.send_modal(GetPlayerProfileModal(self.api_client))
+            async def link_crcon_callback(interaction: Interaction):
+                search_view = SearchTypeSelectView(modal_class=GetPlayerProfileModal)
+                await interaction.response.send_message(
+                    "Vyber způsob vyhledávání:",
+                    view=search_view,
+                    ephemeral=True,
+                )
+            button.callback = link_crcon_callback
             view.add_item(button)
             await interaction.followup.send(
                 f"### [2/2] Propojeni s CRCON\n"

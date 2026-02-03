@@ -68,7 +68,7 @@ class ThreadCloseView(discord.ui.View):
             return
 
         # Get the ticket creator ID from the database
-        ticket_creator_id = get_thread_creator(thread.id)
+        ticket_creator_id = await get_thread_creator(thread.id)
 
         # Remove the user who created the ticket (not the bot who created the thread)
         creator_removed = False
@@ -85,7 +85,7 @@ class ThreadCloseView(discord.ui.View):
                         pass
 
         # Mark thread as closed in database
-        close_thread(thread.id)
+        await close_thread(thread.id)
 
         # Send response first before archiving
         if creator_removed:

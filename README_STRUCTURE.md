@@ -9,16 +9,16 @@ vlk_discord_bot/
 ├── main.py              # Entry point - starts the bot
 ├── bot.py               # Bot initialization, commands, and event handlers
 ├── config.py            # Configuration and environment variables
-├── models.py            # Data classes (Player, PlayerSearchResult)
+├── models.py            # Data classes (API_Player, PlayerSearchResult)
 ├── database.py          # SQLite database operations
 ├── api_client.py        # API client for game server communication
 ├── utils.py             # Utility functions (logging, search tracking, VIP processing)
 ├── views/               # Discord UI components
 │   ├── __init__.py      # Package exports
 │   ├── vip_claim.py     # VIP claim button and modal
-│   └── player_select.py # Player selection dropdown and view
+│   └── player_select.py # API_Player selection dropdown and view
 ├── .env                 # Environment variables (not in git)
-└── claims.sqlite3       # SQLite database (generated at runtime)
+└── db.sqlite3       # SQLite database (generated at runtime)
 ```
 
 ## Module Descriptions
@@ -41,7 +41,7 @@ vlk_discord_bot/
 - Environment validation
 
 ### `models.py`
-- `Player`: Represents a player profile from the game API
+- `API_Player`: Represents a player profile from the game API
 - `PlayerSearchResult`: Represents search results
 
 ### `database.py`

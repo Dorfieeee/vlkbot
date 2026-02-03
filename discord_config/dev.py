@@ -1,6 +1,5 @@
 """Development environment configuration for Discord IDs."""
 
-# Discord Server IDs
 GUILD_ID: int = 1191044555844370492  # Set your dev server ID here
 
 # Role IDs
@@ -12,4 +11,20 @@ COMMUNITY_ROLE_ID: int = 1191044555844370497  # Community role ID
 
 # Channel IDs
 LOG_CHANNEL_ID: int  = 1450922331408171150  # Channel for logging
+TRAINING_LOG_CHANNEL_ID: int = 1450922331408171150  # Channel for training logs
+
+TRAINING_ROLES = {
+    "tac_prep_course": 1464383195217920181,
+    "ar_course": 1464383195217920181,
+    "ar_pro_course": 1464383195217920181,
+    "at_basic_course": 1464383195217920181,
+    "parkour_course": 1464383195217920181,
+    "at_pro_course": 1464383195217920181,
+    "infantry_course": 1464383195217920181,
+    "tank_course": 1464383195217920181,
+    "sl_course": 1464383195217920181,
+    "cmd_course": 1464383195217920181,
+    "recon_course": 1464383195217920181,
+    "mg_course": 1464383195217920181,
+}
 

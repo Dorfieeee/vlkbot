@@ -9,7 +9,7 @@ services:
       - .env
     # Persist the local SQLite DB on the host
     volumes:
-      - ./claims.sqlite3:/app/claims.sqlite3
+      - ./db.sqlite3:/app/db.sqlite3
     restart: unless-stopped
 
 

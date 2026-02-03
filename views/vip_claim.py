@@ -1,38 +1,14 @@
 """VIP claim view and modal for initiating the VIP claim flow."""
+
+from datetime import datetime
 import discord
 
-from config import SUPPORT_ROLE_ID
+from config import SUPPORT_ROLE_ID, INFINITE_VIP_DATE
 from api_client import get_api_client
-from components.modals import GetPlayerProfileModal
-from database import create_thread_record, has_claimed
-from models import Player, PlayerSearchResult
-from utils import process_vip_reward, send_log_message
-from views.player_select import PlayerSelect, PlayerSelectView
+from database import create_thread_record, get_player
+from utils import process_vip_reward, start_player_registration
 from views.thread_close import ThreadCloseView
 
-
-class VipClaimPlayerSelect(PlayerSelect):
-    async def handle_callback(interaction: discord.Interaction, player: Player):
-        api_client = get_api_client()
-        await process_vip_reward(interaction, api_client, player, interaction.user)
-
-class VipClaimPlayerSelectView(PlayerSelectView):
-    def __init__(self, search_results: list[PlayerSearchResult]):
-        super().__init__()
-        self.add_item(VipClaimPlayerSelect(search_results))
-        self.modal = VipClaimGetPlayerModal
-
-class VipClaimGetPlayerModal(GetPlayerProfileModal):
-    async def handle_submit(self, interaction: discord.Interaction, search_results: list[PlayerSearchResult]):
-        view = VipClaimPlayerSelectView(search_results)
-
-        result_text = "hráče" if len(search_results) == 1 else "hráčů"
-        await interaction.followup.send(
-            f"Našli jsme **{len(search_results)}** {result_text} s jménem obsahujícím **{self.player_name}**.\n"
-            "Vyber prosím svůj účet ze seznamu:",
-            view=view,
-            ephemeral=True,
-        )
 
 class VipClaimView(discord.ui.View):
     """Persistent view with a button to initiate VIP claiming."""
@@ -40,11 +16,14 @@ class VipClaimView(discord.ui.View):
     def __init__(self):
         # timeout=None makes the view persistent across restarts (if re-added in setup_hook)
         super().__init__(timeout=None)
+        self.api_client = get_api_client()
 
     @discord.ui.button(
         label="Vyzvedni si VIP",
-        style=discord.ButtonStyle.green,
+        style=discord.ButtonStyle.gray,
         custom_id="vip_claim_get",
+        emoji="⭐",
+        row=0,
     )
     async def claim_button(
         self,
@@ -52,28 +31,109 @@ class VipClaimView(discord.ui.View):
         button: discord.ui.Button,  # type: ignore[override]
     ) -> None:
         """Handle the VIP claim button click."""
-        # Log every button click
-        await send_log_message(
-            interaction.client,
-            f"🔔 Kliknutí na VIP tlačítko od {interaction.user.mention} "
-            f"(`{interaction.user.id}`) v kanálu <#{interaction.channel_id}>.",
-        )
 
-        # Absolutely first check: this Discord user must not have claimed VIP before.
-        if has_claimed(interaction.user.id):
-            await interaction.response.send_message(
-                "Tento Discord účet už si jednorázovou **VIP odměnu** vybral.\n",
-                ephemeral=True,
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        player = await get_player(discord_id=interaction.user.id)
+        if not player:
+            await start_player_registration(interaction)
+            return
+
+        try:
+            api_player = await self.api_client.fetch_player_by_game_id(player.player_id)
+            if not api_player:
+                raise Exception(f"No player found with player_id: {player.player_id}")
+        except:
+            await interaction.edit_original_response(
+                content="Z nějakého důvodu se nepodařilo načíst tvůj profil.\nZkus to prosím později.",
+                view=None,
             )
             return
 
-        await interaction.response.send_modal(VipClaimGetPlayerModal())
+        await process_vip_reward(
+            interaction, self.api_client, api_player, interaction.user
+        )
+
+    @discord.ui.button(
+        label="Tvůj VIP status",
+        style=discord.ButtonStyle.gray,
+        custom_id="vip_claim_status",
+        emoji="📰",
+        row=0,
+    )
+    async def status_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # type: ignore[override]
+    ) -> None:
+        """Handle the VIP status button click."""
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        player = await get_player(discord_id=interaction.user.id)
+        if not player:
+            await start_player_registration(interaction)
+            return
+
+        try:
+            api_player = await self.api_client.fetch_player_by_game_id(player.player_id)
+            if not api_player:
+                raise Exception(f"No player found with player_id: {player.player_id}")
+        except:
+            await interaction.edit_original_response(
+                content="Z nějakého důvodu se nepodařilo načíst tvůj profil.\nZkus to prosím později.",
+                view=None,
+            )
+            return
+
+        embed = discord.Embed(
+            color=discord.Color.blue(),
+            title=f"VIP Status pro {api_player.display_name}",
+        )
+
+        for server_number in [1, 2]:
+            server_name = f"VLK #{server_number}"
+            vip = next(
+                (v for v in api_player.vips if v.get("server_number") == server_number),
+                None,
+            )
+
+            if not vip:
+                text = "↳ momentálně **nemáš VIP**"
+            else :
+                current_exp_str = vip.get("expiration")
+
+                if current_exp_str != INFINITE_VIP_DATE:
+                    expiration = datetime.fromisoformat(current_exp_str.replace("Z", "+00:00")).timestamp()
+                    text = f"↳ máš **VIP do <t:{int(expiration)}:D>**"
+                else:
+                    text = f"↳ máš **trvalé VIP**"
+            embed.add_field(name=server_name, value=text, inline=False)
+        
+        await interaction.edit_original_response(embed=embed, content=None, view=None)
+
+
+    @discord.ui.button(
+        label="Registrace",
+        style=discord.ButtonStyle.gray,
+        custom_id="vip_claim_reg",
+        emoji="🆕",
+        row=1,
+    )
+    async def reg_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # type: ignore[override]
+    ) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)        
+        await start_player_registration(interaction, "## Registrace\nPropoj svůj Discord účet s HLL účtem vedeným na našich serverech")                   
 
 
     @discord.ui.button(
         label="Potřebuji pomoc",
         style=discord.ButtonStyle.danger,
         custom_id="vip_claim_help",
+        emoji="❔",
+        row=1,
     )
     async def help_button(
         self,
@@ -82,8 +142,11 @@ class VipClaimView(discord.ui.View):
     ) -> None:
         await interaction.response.defer(ephemeral=True)
 
-        if not interaction.channel or interaction.channel.type is not discord.ChannelType.text or not interaction.guild:
-            print(interaction.channel)
+        if (
+            not interaction.channel
+            or interaction.channel.type is not discord.ChannelType.text
+            or not interaction.guild
+        ):
             return
 
         thread = await interaction.channel.create_thread(
@@ -93,7 +156,7 @@ class VipClaimView(discord.ui.View):
         )
 
         # Store the thread in the database
-        create_thread_record(thread.id, interaction.user.id)
+        await create_thread_record(thread.id, interaction.user.id)
 
         # First: Add the user who created the ticket to the thread
         try:
@@ -103,7 +166,9 @@ class VipClaimView(discord.ui.View):
             pass
 
         # Get the support role
-        admin_role = interaction.guild.get_role(SUPPORT_ROLE_ID) if SUPPORT_ROLE_ID else None
+        admin_role = (
+            interaction.guild.get_role(SUPPORT_ROLE_ID) if SUPPORT_ROLE_ID else None
+        )
 
         # Second: Send a message tagging all support roles
         # This automatically adds all members of the role (<100 members) to the thread
@@ -118,7 +183,7 @@ class VipClaimView(discord.ui.View):
             "Prosím popiš svůj problém a počkej na odpověď.",
             view=close_view,
         )
-        
+
         # Pin the message with the close button to the top
         try:
             await close_message.pin()
@@ -128,7 +193,6 @@ class VipClaimView(discord.ui.View):
         except discord.HTTPException:
             # Ignore pinning errors
             pass
-
 
         await interaction.followup.send(
             f"Vlákno pro pomoc bylo vytvořeno: {thread.mention}",

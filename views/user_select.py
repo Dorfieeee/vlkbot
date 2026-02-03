@@ -5,15 +5,15 @@ from typing import Optional
 class PaginatedMemberSelect(discord.ui.View):
     """View with paginated select component showing only users with a specific role."""
     
-    def __init__(self, members: discord.Member, confirm_callback, placeholder: str = "Select user...", timeout: Optional[float] = 300):
+    def __init__(self, members: list[discord.Member], confirm_callback, placeholder: str = "Select user...", timeout: Optional[float] = 300, items_per_page: Optional[int] = 25):
         super().__init__(timeout=timeout)
 
-        # Filter members to only those with the specified role
+        self.selected_members: list[discord.Member] = []
         self.members = members
         self.confirm_callback = confirm_callback
         self.placeholder = placeholder
         self.current_page = 0
-        self.items_per_page = 25
+        self.items_per_page = items_per_page
 
         # Calculate total pages
         self.total_pages = (len(self.members) + self.items_per_page - 1) // self.items_per_page
@@ -33,13 +33,15 @@ class PaginatedMemberSelect(discord.ui.View):
         start_idx = self.current_page * self.items_per_page
         end_idx = start_idx + self.items_per_page
         page_members = self.members[start_idx:end_idx]
+        selected_member_ids = [m.id for m in self.selected_members]
         
         options = []
         for member in page_members:
             options.append(discord.SelectOption(
                 label=member.display_name[:100],  # Discord label limit
                 value=str(member.id),
-                description=f"@{member.name}"
+                description=f"@{member.name}",
+                emoji="✅" if member.id in selected_member_ids else None,
             ))
         
         # If no options, add a disabled placeholder
@@ -66,33 +68,17 @@ class PaginatedMemberSelect(discord.ui.View):
             return
         
         selected_user_id = int(self.user_select.values[0])
-        selected_user = interaction.guild.get_member(selected_user_id)
+        selected_user = next((m for m in self.members if m.id == selected_user_id), None)
+
+        if not selected_user:
+            return
         
-        # Disable all components to prevent further interaction
-        for item in self.children:
-            item.disabled = True
-        
-        async def cancel_callback(interaction: discord.Interaction):
-            await interaction.followup.send("Výběr zrušen.", ephemeral=True)
-
-        async def confirm_callback_wrapper(interaction: discord.Interaction):
-            await self.confirm_callback(interaction, selected_user)
-
-        confirm_view = ConfirmCancelView(
-            text=f"Opravdu chcete vybrat uživatele {selected_user.mention}?",
-            confirm_callback=confirm_callback_wrapper,
-            cancel_callback=cancel_callback,
-        )
-
-        # Then edit the stored message with confirmation view
-        await interaction.response.edit_message(
-            content=f"Vybrali jste: {selected_user.mention}\n\nOpravdu chcete pokračovat?",
-            view=confirm_view
-        )
+        self.selected_members.append(selected_user)
+        await self._update_view(interaction)
     
     async def handle_user_selection(self, interaction: discord.Interaction, selected_user: discord.Member):
         """Override this method to handle the selected user."""
-        await interaction.followup.edit_message(f"Selected user: {selected_user.mention}", ephemeral=True)
+        raise NotImplementedError()
     
     @property
     def prev_button(self) -> discord.ui.Button:
@@ -152,8 +138,11 @@ class PaginatedMemberSelect(discord.ui.View):
             self.add_item(self.prev_button)
             self.add_item(self.page_label)
             self.add_item(self.next_button)
+
+        content = "Vybraní uživatelé\n\n"
+        content += "\n".join([m.mention for m in self.selected_members])
         
-        await interaction.followup.edit_message(view=self)
+        await interaction.response.edit_message(content=content, view=self)
 
 class ConfirmCancelView(discord.ui.View):
     """View that displays text with confirm and cancel buttons."""

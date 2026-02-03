@@ -4,8 +4,8 @@ from typing import Optional
 
 import httpx
 
-from config import API_BASE_URL, API_BEARER_TOKEN
-from models import Player, PlayerSearchResult
+from config import API_BASE_URL, API_BEARER_TOKEN, SERVER_NUMBERS, SERVER_URLS
+from models import API_Player, PlayerSearchResult
 
 
 class ApiClient:
@@ -13,6 +13,12 @@ class ApiClient:
 
     def __init__(self, base_url: str, bearer_token: str) -> None:
         self.base_url = base_url.rstrip("/")
+        # Map server numbers to their specific base URLs (fallback to default)
+        self._server_base_urls = {
+            number: url.rstrip("/")
+            for number, url in zip(SERVER_NUMBERS, SERVER_URLS)
+            if url
+        }
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             headers={"Authorization": f"Bearer {bearer_token}", "Accept": "application/json"},
@@ -23,7 +29,7 @@ class ApiClient:
         """Close the HTTP client."""
         await self._client.aclose()
 
-    async def fetch_player_by_game_id(self, game_id: str) -> Optional[Player]:
+    async def fetch_player_by_game_id(self, game_id: str) -> Optional[API_Player]:
         """
         Fetch a player profile by their game ID.
         GET BASE_URL + get_player_profile?player_id=<ID>
@@ -47,7 +53,7 @@ class ApiClient:
             or str(result.get("player_id"))
         )
 
-        return Player(
+        return API_Player(
             player_id=str(result.get("player_id")),
             display_name=display_name,
             is_vip=bool(result.get("is_vip", False)),
@@ -59,14 +65,14 @@ class ApiClient:
             account_lang=account.get("lang") or "en",
         )
 
-    async def edit_player_account(self, player: Player, discord_id: int) -> None:
+    async def edit_player_account(self, player: API_Player, discord_id: int) -> None:
         """
         Update a player's account information, particularly their Discord ID.
         POST BASE_URL + edit_player_account
         """
         payload = {
             "player_id": player.player_id,
-            "name": player.account_name or player.display_name,
+            "name": player.account_name,
             "discord_id": str(discord_id),
             "is_member": player.account_is_member,
             "country": player.account_country,
@@ -75,7 +81,7 @@ class ApiClient:
         resp = await self._client.post("/edit_player_account", json=payload)
         resp.raise_for_status()
 
-    async def add_vip(self, player: Player, expiration: datetime) -> None:
+    async def add_vip(self, player: API_Player, expiration: datetime, server_number: int = 1) -> None:
         """
         Add or extend VIP status for a player.
         POST BASE_URL + add_vip
@@ -87,10 +93,14 @@ class ApiClient:
             "expiration": expiration_str,
             "description": f"{player.display_name}",
         }
-        resp = await self._client.post("/add_vip", json=payload)
+        # If a server-specific base URL is configured, use it for this call only.
+        target_base = self._server_base_urls.get(server_number, self.base_url)
+        url = f"{target_base}/add_vip"
+
+        resp = await self._client.post(url, json=payload)
         resp.raise_for_status()
 
-    async def search_players(self, player_name: str) -> list[PlayerSearchResult]:
+    async def search_players(self, **params) -> list[PlayerSearchResult]:
         """
         Search for players by name.
         POST BASE_URL + get_players_history
@@ -104,7 +114,7 @@ class ApiClient:
             "exact_name_match": False,
             "ignore_accent": False,
             "is_watched": False,
-            "player_name": player_name,
+            **params,
         }
         resp = await self._client.post("/get_players_history", json=payload)
         resp.raise_for_status()
@@ -127,8 +137,9 @@ class ApiClient:
 
         return search_results
 
-    async def get_public_info(self) -> dict:
-        resp = await self._client.get("/get_public_info")
+async def get_public_info(base_url) -> dict:
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(base_url + "/api/get_public_info")
         resp.raise_for_status()
         return resp.json()["result"]
 

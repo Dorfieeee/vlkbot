@@ -43,12 +43,12 @@ docker run --rm \
   vlk-discord-bot
 ```
 
-If you want the local SQLite DB (`claims.sqlite3`) to persist outside the container, mount a volume:
+If you want the local SQLite DB (`db.sqlite3`) to persist outside the container, mount a volume:
 
 ```bash
 docker run --rm \
   --env-file .env \
-  -v "$(pwd)/claims.sqlite3:/app/claims.sqlite3" \
+  -v "$(pwd)/db.sqlite3:/app/db.sqlite3" \
   vlk-discord-bot
 ```
 
@@ -63,7 +63,7 @@ docker compose up --build
 This will:
 - Build the image from the local `Dockerfile`.
 - Load all environment variables from `.env`.
-- Persist `claims.sqlite3` on the host via a bind mount.
+- Persist `db.sqlite3` on the host via a bind mount.
 
 ### Usage
 
