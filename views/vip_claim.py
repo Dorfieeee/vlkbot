@@ -9,8 +9,15 @@ from database import create_thread_record, get_player
 from utils import process_vip_reward, start_player_registration
 from views.thread_close import ThreadCloseView
 
+BRAND_EMOJIS = {
+    "paypal": "<:paypal:1469077619940262010>",
+    "kofi": "<:kofi:1469077105454219305>",
+    "moneta": "<:moneta:1469080159922552883>",
+    "valkyria": "<:valkyria:1096506595497758801>",
+}
 
-class VipClaimView(discord.ui.View):
+
+class VipClaimView(discord.ui.LayoutView):
     """Persistent view with a button to initiate VIP claiming."""
 
     def __init__(self):
@@ -18,12 +25,13 @@ class VipClaimView(discord.ui.View):
         super().__init__(timeout=None)
         self.api_client = get_api_client()
 
-    @discord.ui.button(
+    action_row = discord.ui.ActionRow()
+
+    @action_row.button(
         label="Vyzvedni si VIP",
         style=discord.ButtonStyle.gray,
         custom_id="vip_claim_get",
         emoji="⭐",
-        row=0,
     )
     async def claim_button(
         self,
@@ -54,12 +62,11 @@ class VipClaimView(discord.ui.View):
             interaction, self.api_client, api_player, interaction.user
         )
 
-    @discord.ui.button(
+    @action_row.button(
         label="Tvůj VIP status",
         style=discord.ButtonStyle.gray,
         custom_id="vip_claim_status",
         emoji="📰",
-        row=0,
     )
     async def status_button(
         self,
@@ -99,41 +106,42 @@ class VipClaimView(discord.ui.View):
 
             if not vip:
                 text = "↳ momentálně **nemáš VIP**"
-            else :
+            else:
                 current_exp_str = vip.get("expiration")
 
                 if current_exp_str != INFINITE_VIP_DATE:
-                    expiration = datetime.fromisoformat(current_exp_str.replace("Z", "+00:00")).timestamp()
+                    expiration = datetime.fromisoformat(
+                        current_exp_str.replace("Z", "+00:00")
+                    ).timestamp()
                     text = f"↳ máš **VIP do <t:{int(expiration)}:D>**"
                 else:
                     text = f"↳ máš **trvalé VIP**"
             embed.add_field(name=server_name, value=text, inline=False)
-        
+
         await interaction.edit_original_response(embed=embed, content=None, view=None)
 
-
-    @discord.ui.button(
+    @action_row.button(
         label="Registrace",
         style=discord.ButtonStyle.gray,
         custom_id="vip_claim_reg",
         emoji="🆕",
-        row=1,
     )
     async def reg_button(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button,  # type: ignore[override]
     ) -> None:
-        await interaction.response.defer(ephemeral=True, thinking=True)        
-        await start_player_registration(interaction, "## Registrace\nPropoj svůj Discord účet s HLL účtem vedeným na našich serverech")                   
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await start_player_registration(
+            interaction,
+            "## Registrace\nPropoj svůj Discord účet s HLL účtem vedeným na našich serverech",
+        )
 
-
-    @discord.ui.button(
+    @action_row.button(
         label="Potřebuji pomoc",
-        style=discord.ButtonStyle.danger,
+        style=discord.ButtonStyle.gray,
         custom_id="vip_claim_help",
-        emoji="❔",
-        row=1,
+        emoji="❓",
     )
     async def help_button(
         self,
@@ -198,3 +206,43 @@ class VipClaimView(discord.ui.View):
             f"Vlákno pro pomoc bylo vytvořeno: {thread.mention}",
             ephemeral=True,
         )
+
+    @action_row.button(
+        label="Přispěj na servery",
+        style=discord.ButtonStyle.danger,
+        custom_id="vip_donate",
+        emoji="💌",
+    )
+    async def donate_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        embed = discord.Embed(
+            title="Příspěvek",
+            description=f"""
+            Jako každý projekt tvořený pro zábavu lidí, i tento vyžaduje velké úsilí a náklady.
+            Každý má možnost přispět finančním příspěvkem, ať už jen na chod serverů nebo na rozvoj komunity.
+
+            Celkové náklady pro běh serverů a všech služeb jsou pro rok 2026 zhruba 30.000 Kč.
+
+            Možnosti plateb:    
+            ↳ {BRAND_EMOJIS["kofi"]} Kofi | [Odkaz](https://ko-fi.com/valkyriahll)
+            ↳ {BRAND_EMOJIS["paypal"]} Paypal | [Odkaz](https://www.paypal.com/paypalme/valkyriahll?country.x=CZ&locale.x=cs_CZ)
+            ↳ {BRAND_EMOJIS["moneta"]} Moneta | [Odkaz](https://transparentniucty.moneta.cz/256862392)
+
+            Děkujeme předem za jakýkoli finanční příspěvek!
+
+            {BRAND_EMOJIS["valkyria"]} Valkyria
+            """
+        )
+        embed.set_image(
+            url="https://media.discordapp.net/attachments/1072205500806070312/1224092520686813386/qrkod.png?ex=6985a5bf&is=6984543f&hm=9e21e76bb9c7b1e8cfb941c5047c1853ab14a6fc89f172eee7bc67546af2e939&=&format=webp&quality=lossless&width=800&height=800"
+        )
+        try:
+            guild_logo = interaction.guild.icon.url # type: ignore
+        except:
+            guild_logo = "https://cdn.discordapp.com/icons/963323629242826762/8391d3fa3283562da0afed0cab476241.webp?size=160&quality=lossless"
+
+        embed.set_author(name="Valkyria", icon_url=guild_logo)
+        await interaction.response.send_message(embed=embed, ephemeral=True)    
