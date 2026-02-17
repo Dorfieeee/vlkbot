@@ -58,7 +58,7 @@ async def populate_initial_trainings() -> None:
             "id": "at_basics",
             "role_id": TRAINING_ROLES["at_basic_course"],
             "required_roles": [REKRUT_ROLE_ID, MEMBER_ROLE_ID],
-            "is_mandatory": True,
+            "is_mandatory": False,
             "img": "https://images-ext-1.discordapp.net/external/MosbdgSUj9qftpshKWBCbOTZml3dYmIFEdY-fp9a3BI/https/i.postimg.cc/rFHxF5hp/z-klady-AT.jpg?format=webp&width=1220&height=659",
             "desc": """Tento výcvik je pořádán pro Rekruty klanu VLKㆍ.\n\nCo tě čeká:\nTeoretická část + ukázky...\n• průraznost tanků: kam střílet a kam nestřílet podle typu pancíře\n• seznámení se s AT třídou...\n• přehled zbraní: trubky, děla, satchel, AT miny, AP miny, granáty\n\nPraktická část:\n• střelba z Panzerschrecku a bazooky na 50 m, 100 m, 150 m, 200 m\n• ukázka i na 730–740 m a 910–950 m""",
         },
@@ -117,6 +117,14 @@ async def populate_initial_trainings() -> None:
             "required_roles": [],
             "img": "https://images-ext-1.discordapp.net/external/K730d2zFNXrGWEKi6zE09YCkOmf36llIjmf0I5xeU3s/https/i.postimg.cc/Dy7hThg2/mg.jpg?format=webp&width=1220&height=686",
             "desc": """Tento výcvik je určen pro všechny se zájmem o roli MG.\n\nO co se jedná:\n• během výcviku si projdete klíčové aspekty používání kulometu – od správného rozložení pozice až po efektivní palebné krytí pro tým\n• naučíte se využívat terén ve svůj prospěch, kdy a jak se přesouvat\n• součástí je i praktická část zaměřená na potlačování nepřítele\n\nNa konci výcviku obdržíte zpětnou vazbu s doporučením, na co se zaměřit a co zlepšit, aby vaše role MG byla co nejefektivnější v ostré akci.""",
+        },
+        "Základy HLL": {
+            "id": "hll_basics",
+            "role_id": TRAINING_ROLES["hll_basics"],
+            "required_roles": [],
+            "is_mandatory": False,
+            "img": "https://images-ext-1.discordapp.net/external/o6fjxW7PypIf-0RQyj_vER5aAsNSRkFa1rrmy_ArAE0/https/i.postimg.cc/GtGZYjsF/image.png?format=webp&quality=lossless&width=2032&height=1694",
+            "desc": """Co tě čeká:\nVysvětlíme základní mechaniky Hell Let Loose a jak se stát dobrým a užitečným hráčem.""",
         },
     }
 

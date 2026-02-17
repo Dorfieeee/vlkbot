@@ -1,6 +1,5 @@
 """Production environment configuration for Discord IDs."""
 
-# Discord Server IDs
 GUILD_ID: int = 963323629242826762  # Set your production server ID here
 
 # Role IDs
@@ -8,11 +7,16 @@ HLL_ROLE_ID: int = 1193955089988190318  # Required role for claiming VIP
 SUPPORT_ROLE_ID: int = 1456972150383841507  # Support role for VIP claims
 MEMBER_ROLE_ID: int = 1199469580670746755  # Member role ID
 REKRUT_ROLE_ID: int = 963326904067293216  # Member role ID
+REKRUT_TANK_ROLE_ID: int = 1326940601408557087  # Member role ID
+MEMBER_TANK_ROLE_ID: int = 1016369844188368896
 COMMUNITY_ROLE_ID: int = 1199472894854561813  # Community role ID
 
 # Channel IDs
 LOG_CHANNEL_ID: int = 1450837943328440380  # Channel for logging
 TRAINING_LOG_CHANNEL_ID: int = 1467897839148470272  # Channel for training logs
+MEMBER_CHAT_CHANNEL_ID: int = 967178575532924958
+REKRUT_CHAT_CHANNEL_ID: int = 1463881570686337171
+REKRUT_TANK_CHAT_CHANNEL_ID: int = 1472926962472456416
 
 TRAINING_ROLES = {
     "tac_prep_course": 1394752848457367722,
@@ -27,4 +31,5 @@ TRAINING_ROLES = {
     "cmd_course": 1394756692217958420,
     "recon_course": 1394757264946233444,
     "mg_course": 1394757907488440382,
+    "hll_basics": 1471110959019065517,
 }

@@ -25,102 +25,19 @@ class VipClaimView(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.api_client = get_api_client()
 
-    action_row = discord.ui.ActionRow()
-
-    @action_row.button(
-        label="Vyzvedni si VIP",
-        style=discord.ButtonStyle.gray,
-        custom_id="vip_claim_get",
-        emoji="⭐",
+    container = discord.ui.Container(
+        discord.ui.TextDisplay(
+            '### ⭐ VIP GIVEAWAY ⭐\n'
+            'Vyzvedni si **10 dní VIP** na VLK serveru.\n'
+            '*Držitel VIP na serveru má zaručenou lepší pozici v čekací frontě.*\n'
+            '- *Každý Discord účet a herní účet může tuto odměnu využít jen jednou.*\n- *Alespoň jednou ses musel/a připojit na náš HLL server.*'
+        ),
+        accent_colour=discord.Colour.dark_grey(),
     )
-    async def claim_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,  # type: ignore[override]
-    ) -> None:
-        """Handle the VIP claim button click."""
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
+    action_row_1 = discord.ui.ActionRow()
 
-        player = await get_player(discord_id=interaction.user.id)
-        if not player:
-            await start_player_registration(interaction)
-            return
-
-        try:
-            api_player = await self.api_client.fetch_player_by_game_id(player.player_id)
-            if not api_player:
-                raise Exception(f"No player found with player_id: {player.player_id}")
-        except:
-            await interaction.edit_original_response(
-                content="Z nějakého důvodu se nepodařilo načíst tvůj profil.\nZkus to prosím později.",
-                view=None,
-            )
-            return
-
-        await process_vip_reward(
-            interaction, self.api_client, api_player, interaction.user
-        )
-
-    @action_row.button(
-        label="Tvůj VIP status",
-        style=discord.ButtonStyle.gray,
-        custom_id="vip_claim_status",
-        emoji="📰",
-    )
-    async def status_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,  # type: ignore[override]
-    ) -> None:
-        """Handle the VIP status button click."""
-        await interaction.response.defer(ephemeral=True, thinking=True)
-
-        player = await get_player(discord_id=interaction.user.id)
-        if not player:
-            await start_player_registration(interaction)
-            return
-
-        try:
-            api_player = await self.api_client.fetch_player_by_game_id(player.player_id)
-            if not api_player:
-                raise Exception(f"No player found with player_id: {player.player_id}")
-        except:
-            await interaction.edit_original_response(
-                content="Z nějakého důvodu se nepodařilo načíst tvůj profil.\nZkus to prosím později.",
-                view=None,
-            )
-            return
-
-        embed = discord.Embed(
-            color=discord.Color.blue(),
-            title=f"VIP Status pro {api_player.display_name}",
-        )
-
-        for server_number in [1, 2]:
-            server_name = f"VLK #{server_number}"
-            vip = next(
-                (v for v in api_player.vips if v.get("server_number") == server_number),
-                None,
-            )
-
-            if not vip:
-                text = "↳ momentálně **nemáš VIP**"
-            else:
-                current_exp_str = vip.get("expiration")
-
-                if current_exp_str != INFINITE_VIP_DATE:
-                    expiration = datetime.fromisoformat(
-                        current_exp_str.replace("Z", "+00:00")
-                    ).timestamp()
-                    text = f"↳ máš **VIP do <t:{int(expiration)}:D>**"
-                else:
-                    text = f"↳ máš **trvalé VIP**"
-            embed.add_field(name=server_name, value=text, inline=False)
-
-        await interaction.edit_original_response(embed=embed, content=None, view=None)
-
-    @action_row.button(
+    @action_row_1.button(
         label="Registrace",
         style=discord.ButtonStyle.gray,
         custom_id="vip_claim_reg",
@@ -137,7 +54,7 @@ class VipClaimView(discord.ui.LayoutView):
             "## Registrace\nPropoj svůj Discord účet s HLL účtem vedeným na našich serverech",
         )
 
-    @action_row.button(
+    @action_row_1.button(
         label="Potřebuji pomoc",
         style=discord.ButtonStyle.gray,
         custom_id="vip_claim_help",
@@ -207,7 +124,105 @@ class VipClaimView(discord.ui.LayoutView):
             ephemeral=True,
         )
 
-    @action_row.button(
+
+    action_row_2 = discord.ui.ActionRow()
+
+    @action_row_2.button(
+        label="Vyzvedni si VIP",
+        style=discord.ButtonStyle.gray,
+        custom_id="vip_claim_get",
+        emoji="⭐",
+    )
+    async def claim_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # type: ignore[override]
+    ) -> None:
+        """Handle the VIP claim button click."""
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        player = await get_player(discord_id=interaction.user.id)
+        if not player:
+            await start_player_registration(interaction)
+            return
+
+        try:
+            api_player = await self.api_client.fetch_player_by_game_id(player.player_id)
+            if not api_player:
+                raise Exception(f"No player found with player_id: {player.player_id}")
+        except:
+            await interaction.edit_original_response(
+                content="Z nějakého důvodu se nepodařilo načíst tvůj profil.\nZkus to prosím později.",
+                view=None,
+            )
+            return
+
+        await process_vip_reward(
+            interaction, self.api_client, api_player, interaction.user
+        )
+
+    @action_row_2.button(
+        label="Tvůj VIP status",
+        style=discord.ButtonStyle.gray,
+        custom_id="vip_claim_status",
+        emoji="📰",
+    )
+    async def status_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # type: ignore[override]
+    ) -> None:
+        """Handle the VIP status button click."""
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        player = await get_player(discord_id=interaction.user.id)
+        if not player:
+            await start_player_registration(interaction)
+            return
+
+        try:
+            api_player = await self.api_client.fetch_player_by_game_id(player.player_id)
+            if not api_player:
+                raise Exception(f"No player found with player_id: {player.player_id}")
+        except:
+            await interaction.edit_original_response(
+                content="Z nějakého důvodu se nepodařilo načíst tvůj profil.\nZkus to prosím později.",
+                view=None,
+            )
+            return
+
+        embed = discord.Embed(
+            color=discord.Color.blue(),
+            title=f"VIP Status pro {api_player.display_name}",
+        )
+
+        for server_number in [1, 2]:
+            server_name = f"VLK #{server_number}"
+            vip = next(
+                (v for v in api_player.vips if v.get("server_number") == server_number),
+                None,
+            )
+
+            if not vip:
+                text = "↳ momentálně **nemáš VIP**"
+            else:
+                current_exp_str = vip.get("expiration")
+
+                if current_exp_str != INFINITE_VIP_DATE:
+                    expiration = datetime.fromisoformat(
+                        current_exp_str.replace("Z", "+00:00")
+                    ).timestamp()
+                    text = f"↳ máš **VIP do <t:{int(expiration)}:D>**"
+                else:
+                    text = f"↳ máš **trvalé VIP**"
+            embed.add_field(name=server_name, value=text, inline=False)
+
+        await interaction.edit_original_response(embed=embed, content=None, view=None)
+
+    action_row_3 = discord.ui.ActionRow()
+
+    @action_row_3.button(
         label="Přispěj na servery",
         style=discord.ButtonStyle.danger,
         custom_id="vip_donate",

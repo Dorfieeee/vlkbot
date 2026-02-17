@@ -150,6 +150,7 @@ class API_Player:
     account_is_member: bool
     account_country: Optional[str]
     account_lang: Optional[str]
+    level: int
 
 
 @dataclass

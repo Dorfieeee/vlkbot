@@ -14,6 +14,7 @@ from config import (
 )
 from database import edit_or_create_player, get_player, has_claimed, is_player_claimed, record_claim
 from models import API_Player
+from scripts.fetch_player_profile import fetch_profile_page, scrape_with_regex
 
 
 # --- Logging helpers --------------------------------------------------------
@@ -66,6 +67,27 @@ async def register_player(
     await edit_or_create_player(player.player_id, player.display_name, user.id)
     await api_client.edit_player_account(player, user.id)
 
+async def extend_vip(api_client, player: API_Player, server_number: int, days: int) -> datetime:
+    vip_for_server = next(
+        (v for v in player.vips if v.get("server_number") == server_number),
+        None,
+    )
+
+    new_expiration = datetime.now(UTC) + timedelta(days=days)
+
+    if player.is_vip and vip_for_server:
+        current_exp_str = vip_for_server.get("expiration")
+        from config import INFINITE_VIP_DATE
+
+        if current_exp_str != INFINITE_VIP_DATE:
+            base_dt = datetime.fromisoformat(current_exp_str.replace("Z", "+00:00"))
+            new_expiration = base_dt + timedelta(days=days)
+        else:
+            raise InfiniteVipException(f"⁉️ Na VLK#{server_number} už máš **trvalé VIP**, proto se ti nepočítají žádné další dny.\n")
+
+    await api_client.add_vip(player, new_expiration, server_number)
+
+    return new_expiration
 
 async def process_vip_reward(
     interaction: discord.Interaction,
@@ -138,47 +160,25 @@ async def process_vip_reward(
 
     messages = []
     for server_number in [1, 2]:
-        # Determine VIP extension logic
-        vip_for_server = next(
-            (v for v in player.vips if v.get("server_number") == server_number),
-            None,
-        )
-
-        new_expiration: Optional[datetime] = None
-
-        if player.is_vip and vip_for_server:
-            current_exp_str = vip_for_server.get("expiration")
-            from config import INFINITE_VIP_DATE
-
-            if current_exp_str != INFINITE_VIP_DATE:
-                base_dt = datetime.fromisoformat(current_exp_str.replace("Z", "+00:00"))
-                new_expiration = base_dt + timedelta(days=FREE_VIP_REWARD_LENGTH)
-            else:
-                messages.append(
-                    f"⁉️ Na VLK#{server_number} už máš **trvalé VIP**, proto se ti nepočítají žádné další dny.\n"
-                )
-                continue
+        try:
+            new_expiration = await extend_vip(api_client, player, server_number, FREE_VIP_REWARD_LENGTH)
+        except InfiniteVipException as e:
+            messages.append(str(e))
+        except httpx.HTTPError as exc:
+            await send_log_message(
+                interaction.client,
+                f"❌ Chyba API při `add_vip` pro herní ID `{player.player_id}` - server: `{server_number}` "
+                f"od {user.mention} (`{user.id}`): `{exc}`",
+            )
+            messages.append(
+                f"❌ Něco se pokazilo běhěm přidávání VIP na VLK#{server_number}.\n"
+                f"Admin tým byl kontaktován a podívá se na to, hned jak bude čas. Díky za pochopení.\n"
+            )
         else:
-            # Not VIP (or no record for this server): start counting from now
-            new_expiration = datetime.now(UTC) + timedelta(days=FREE_VIP_REWARD_LENGTH)
-
-        if new_expiration is not None:
-            try:
-                await api_client.add_vip(player, new_expiration, server_number)
-                messages.append(
-                    f"✅ Tvé VIP na VLK#{server_number} bylo **prodlouženo o {FREE_VIP_REWARD_LENGTH} dní**\n"
-                    f"(nové vypršení: <t:{int(new_expiration.timestamp())}:F>).\n"
-                )
-            except httpx.HTTPError as exc:
-                await send_log_message(
-                    interaction.client,
-                    f"❌ Chyba API při `add_vip` pro herní ID `{player.player_id}` - server: `{server_number}` "
-                    f"od {user.mention} (`{user.id}`): `{exc}`",
-                )
-                messages.append(
-                    f"❌ Něco se pokazilo běhěm přidávání VIP na VLK#{server_number}.\n"
-                    f"Admin tým byl kontaktován a podívá se na to, hned jak bude čas. Díky za pochopení.\n"
-                )
+            messages.append(
+                f"✅ Tvé VIP na VLK#{server_number} bylo **prodlouženo o {FREE_VIP_REWARD_LENGTH} dní**\n"
+                f"(nové vypršení: <t:{int(new_expiration.timestamp())}:F>).\n"
+            )
 
     # Record locally so we don't process this Discord ID or player again
     await record_claim(user.id, player.player_id)
@@ -247,3 +247,40 @@ def get_embeds(msg: dict) -> list[discord.Embed]:
 
         embeds.append(embed)
     return embeds
+
+
+async def get_player_data(api_client, player, obdobi) -> str:
+    try:
+        api_player = await api_client.fetch_player_by_game_id(player.player_id)
+        player_level = f" [{api_player.level}] " if api_player else ""
+
+        period = f"{obdobi.value}d" if obdobi.value > 0 else ""
+        player_profile_html = await fetch_profile_page(player.player_id, period)
+        data = scrape_with_regex(player_profile_html)
+        data["hll_id"] = data.get("hll_id")
+        data["profile_url"] = data.get("profile_url") or ""
+
+        if obdobi.value == 0:
+            format_string = "%d %b %Y"
+            since = datetime.strptime(data["first_seen"], format_string)
+        else:
+            since = datetime.now() - timedelta(days=obdobi.value)
+        since_ts = f"<t:{int(since.timestamp())}:d>"
+
+        value = f"↘ {player_level}[{player.player_name}]({data["profile_url"]}) odehrál `{int(data["hours_played"])}` hodin a `{int(data["matches_played"])}` her od {since_ts}\n"
+        value += "↳ "
+        stats = ["KD", "KPM", "WR"]
+        stats_keys = ["kd_ratio", "kpm", "win_rate_pct"]
+        for i, key in enumerate(stats_keys):
+            if key in data:
+                value += f"{stats[i]}: `{data[key]}`;"
+        value += "\n"
+        if "comp_matches" in data:
+            value += f"↳ Odehráno comp zápasů: `{int(data["comp_matches"])}`\n"
+        return value
+    except Exception as e:
+        return "Data se nepovedla načíst."
+
+
+class InfiniteVipException(Exception):
+    "The player already has a permanent VIP"

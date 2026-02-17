@@ -63,6 +63,7 @@ class ApiClient:
             account_is_member=bool(account.get("is_member", False)),
             account_country=account.get("country"),
             account_lang=account.get("lang") or "en",
+            level=soldier.get("level", 1),
         )
 
     async def edit_player_account(self, player: API_Player, discord_id: int) -> None:
