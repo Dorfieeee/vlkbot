@@ -16,12 +16,14 @@ from config import (
     GUILD_ID,
     INFINITE_VIP_DATE,
     MEMBER_ROLE_ID,
+    MIX_EVENT_ROLE_ID,
     REKRUT_ROLE_ID,
     COMMUNITY_ROLE_ID,
     REKRUT_TANK_ROLE_ID,
     MEMBER_TANK_ROLE_ID,
     REKRUT_CHAT_CHANNEL_ID,
     REKRUT_TANK_CHAT_CHANNEL_ID,
+    REKRUT_INF_ROLE_ID,
     MEMBER_CHAT_CHANNEL_ID,
 )
 from database import (
@@ -44,6 +46,7 @@ from utils import InfiniteVipException, extend_vip, get_player_data, send_log_me
 from views import MemberManagementView, VipClaimView
 from views.training_grounds import (
     TrainingSelectView,
+    TrainingSignupListView,
     TrainingSignupLogButton,
     training_player_signup,
 )
@@ -59,6 +62,27 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- Event handlers ---------------------------------------------------------
+
+async def player_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> list[app_commands.Choice[str]]:
+    players = await get_players(player_name=current)
+    return [
+        app_commands.Choice(name=p.player_name, value=str(p.id))
+        for p in players
+        if current.lower() in p.player_name.lower()
+    ]
+
+
+async def training_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> list[app_commands.Choice[str]]:
+    trainings = await get_trainings()
+    return [
+        app_commands.Choice(name=t.name, value=t.id)
+        for t in trainings
+        if current.lower() in t.name
+    ]
 
 
 @bot.event
@@ -99,14 +123,8 @@ async def setup_hook() -> None:  # type: ignore[override]
     guild=discord.Object(id=GUILD_ID),
 )
 async def send_training_panel(interaction: discord.Interaction) -> None:
-    await interaction.response.defer()
     view = await TrainingSelectView.create()
-    embed = discord.Embed(
-        title="Výcvikové centrum Valkyria — Přihlaš se!",
-        description="Klikni na tlačítko výcviku → zobrazí se popis + možnost přihlášení.",
-        color=discord.Color.red(),
-    )
-    await interaction.followup.send(embed=embed, view=view)
+    await interaction.response.send_message(view=view)
 
 
 @app_commands.checks.has_permissions(manage_guild=True)
@@ -358,7 +376,7 @@ async def show_rekruts_progress(
             data["profile_url"] = data.get("profile_url")
             since = datetime.datetime.now() - datetime.timedelta(days=30)
             since_ts = f"<t:{int(since.timestamp())}:d>"
-            value = f"↘ {player_level}[{player.player_name}]({data["profile_url"] if data["profile_url"] else ""}) odehrál `{int(data["hours_played"])}` hodin a `{int(data["matches_played"])}` her od {since_ts}\n"
+            value += f"↘ {player_level}[{player.player_name}]({data["profile_url"] if data["profile_url"] else ""}) odehrál `{int(data["hours_played"])}` hodin a `{int(data["matches_played"])}` her od {since_ts}\n"
         except Exception:
             pass
 
@@ -448,7 +466,7 @@ async def show_players_profile(
             continue
 
         # For players with records, queue a task
-        tasks.append(get_player_data(api_client, player, obdobi))
+        tasks.append(get_player_data(player, obdobi))
         player_member_map.append(member)
 
     if tasks:
@@ -517,7 +535,6 @@ async def show_player_profile(
 ) -> None:
     await interaction.response.defer(ephemeral=private)
 
-    api_client = get_api_client()
     player = await get_player(discord_id=user.id)
 
     embed = discord.Embed(
@@ -533,7 +550,7 @@ async def show_player_profile(
         await interaction.followup.send(embed=embed, ephemeral=private)
         return
 
-    stats = await get_player_data(api_client, player, obdobi)
+    stats = await get_player_data(player, obdobi)
 
     embed.add_field(
         name=user.display_name,
@@ -581,12 +598,12 @@ async def promote_user_to_recrut(
         )
         return
 
-    _roles_to_add = []
+    _roles_to_add = [REKRUT_ROLE_ID, MIX_EVENT_ROLE_ID]
 
     if tankista:
         _roles_to_add.append(REKRUT_TANK_ROLE_ID)
     else:
-        _roles_to_add.append(REKRUT_ROLE_ID)
+        _roles_to_add.append(REKRUT_INF_ROLE_ID)
 
     roles_to_add = [guild.get_role(r_id) for r_id in _roles_to_add]
 
@@ -607,7 +624,7 @@ async def promote_user_to_recrut(
 
     message = f"Uživatel {user.mention} byl úspěšně povýšen na Rekruta Valkyria.\n"
 
-    for server_number in [1, 2]:
+    for server_number in [1]:
         try:
             new_expiration = await extend_vip(
                 api_client, player, server_number, extend_by
@@ -698,6 +715,8 @@ async def promote_user_to_member(
     if tankista:
         _roles_to_remove.append(REKRUT_TANK_ROLE_ID)
         _roles_to_add.append(MEMBER_TANK_ROLE_ID)
+    else:
+        _roles_to_remove.append(REKRUT_INF_ROLE_ID)
 
     try:
         roles_to_remove = [guild.get_role(r_id) for r_id in _roles_to_remove]
@@ -719,7 +738,7 @@ async def promote_user_to_member(
 
     message = f"Uživatel {user.mention} byl úspěšně povýšen na Člena Valkyria.\n"
 
-    for server_number in [1, 2]:
+    for server_number in [1]:
         try:
             await api_client.add_vip(player, datetime.datetime.fromisoformat(extend_by), server_number)
         except httpx.HTTPError as exc:
@@ -796,27 +815,46 @@ async def show_trainings_states(
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-async def player_autocomplete(
-    interaction: discord.Interaction, current: str
-) -> list[app_commands.Choice[str]]:
-    players = await get_players(player_name=current)
-    return [
-        app_commands.Choice(name=p.player_name, value=str(p.id))
-        for p in players
-        if current.lower() in p.player_name.lower()
-    ]
+@app_commands.checks.has_permissions(manage_roles=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@bot.tree.command(
+    name="spravuj_prihlasky_vycviku",
+    description="Zobrazí přihlášky na vybraný výcvik a umožní změnit jejich stav.",
+    guild=discord.Object(id=GUILD_ID),
+)
+@app_commands.describe(training="Vyber výcvik")
+@app_commands.autocomplete(training=training_autocomplete)
+async def manage_training_signups(
+    interaction: discord.Interaction,
+    training: str,
+) -> None:
+    await interaction.response.defer(ephemeral=True)
 
+    # Load only player trainings for this training in 'assigned' or 'interested' state
+    assigned_pts = await get_player_trainings(
+        training_id=training,
+        status="assigned",
+        limit=500,
+    )
+    interested_pts = await get_player_trainings(
+        training_id=training,
+        status="interested",
+        limit=500,
+    )
 
-async def training_autocomplete(
-    interaction: discord.Interaction, current: str
-) -> list[app_commands.Choice[str]]:
-    trainings = await get_trainings()
-    return [
-        app_commands.Choice(name=t.name, value=t.id)
-        for t in trainings
-        if current.lower() in t.name
-    ]
+    pts = assigned_pts + interested_pts
 
+    if not pts:
+        await interaction.followup.send(
+            content="Pro tento výcvik nejsou žádné přihlášky ve stavu *interested* nebo *assigned*.",
+            ephemeral=True,
+        )
+        return
+
+    training_name = pts[0].training_name
+
+    view = TrainingSignupListView(training_name, pts)
+    await interaction.followup.send(view=view, ephemeral=True)
 
 @app_commands.checks.has_permissions(manage_roles=True)
 @app_commands.guilds(discord.Object(id=GUILD_ID))
@@ -1047,6 +1085,90 @@ async def list_users(
 
     await interaction.response.send_message(
         "\n".join(members),
+        ephemeral=True,
+    )
+
+
+@app_commands.checks.has_permissions(manage_roles=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.describe(
+    source_role="Role, podle které se vyberou uživatelé",
+    target_role="Role, která se má přidat nebo odebrat",
+    action="Akce nad target rolí",
+)
+@app_commands.choices(
+    action=[
+        app_commands.Choice(name="Přidat", value="add"),
+        app_commands.Choice(name="Odebrat", value="remove"),
+    ]
+)
+@bot.tree.command(
+    name="uprav_roli_podle_role",
+    description="Přidá nebo odebere roli všem uživatelům s vybranou rolí.",
+    guild=discord.Object(id=GUILD_ID),
+)
+async def update_role_for_role_members(
+    interaction: discord.Interaction,
+    source_role: discord.Role,
+    target_role: discord.Role,
+    action: app_commands.Choice[str],
+) -> None:
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    if not interaction.guild:
+        await interaction.followup.send("Chyba: Nebyla nalezena guilda.")
+        return
+
+    members = list(source_role.members)
+    if not members:
+        await interaction.followup.send(
+            f"Role {source_role.mention} nemá žádné členy.", ephemeral=True
+        )
+        return
+
+    changed = 0
+    already_ok = 0
+    failed = 0
+
+    for member in members:
+        try:
+            if action.value == "add":
+                if target_role in member.roles:
+                    already_ok += 1
+                    continue
+                await member.add_roles(
+                    target_role,
+                    reason=(
+                        f"Bulk role update by {interaction.user} "
+                        f"({interaction.user.id}) via slash command"
+                    ),
+                )
+                changed += 1
+            else:
+                if target_role not in member.roles:
+                    already_ok += 1
+                    continue
+                await member.remove_roles(
+                    target_role,
+                    reason=(
+                        f"Bulk role update by {interaction.user} "
+                        f"({interaction.user.id}) via slash command"
+                    ),
+                )
+                changed += 1
+        except discord.HTTPException:
+            failed += 1
+
+    action_text = "přidána" if action.value == "add" else "odebrána"
+    await interaction.followup.send(
+        (
+            f"Hromadná úprava dokončena.\n"
+            f"- Zdrojová role: {source_role.mention}\n"
+            f"- Cílová role: {target_role.mention} ({action_text})\n"
+            f"- Změněno: **{changed}**\n"
+            f"- Beze změny: **{already_ok}**\n"
+            f"- Chyby: **{failed}**"
+        ),
         ephemeral=True,
     )
 

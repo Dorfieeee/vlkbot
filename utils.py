@@ -159,7 +159,7 @@ async def process_vip_reward(
         )
 
     messages = []
-    for server_number in [1, 2]:
+    for server_number in [1]:
         try:
             new_expiration = await extend_vip(api_client, player, server_number, FREE_VIP_REWARD_LENGTH)
         except InfiniteVipException as e:
@@ -248,17 +248,75 @@ def get_embeds(msg: dict) -> list[discord.Embed]:
         embeds.append(embed)
     return embeds
 
+def _normalize_obdobi_to_period(obdobi) -> str:
+    """
+    Convert different obdobi representations (Choice, int, '90d', etc.)
+    into the 'Xd' period string expected by fetch_profile_page.
+    """
+    days = 0
 
-async def get_player_data(api_client, player, obdobi) -> str:
+    try:
+        if hasattr(obdobi, "value"):
+            days = int(getattr(obdobi, "value"))
+        elif isinstance(obdobi, str):
+            s = obdobi.strip().lower()
+            if s.endswith("d"):
+                s = s[:-1]
+            days = int(s) if s else 0
+        else:
+            days = int(obdobi)
+    except Exception:
+        days = 0
+
+    return f"{days}d" if days > 0 else ""
+
+
+async def fetch_player_data(api_client, player, obdobi):
+    """
+    Fetch detailed player statistics for a given period.
+
+    `obdobi` can be:
+    - an app_commands.Choice[int] (with `.value`)
+    - a plain integer number of days
+    - a string like '90d' or '30'
+    """
     try:
         api_player = await api_client.fetch_player_by_game_id(player.player_id)
-        player_level = f" [{api_player.level}] " if api_player else ""
+        player_level = api_player.level
+        player_name = api_player.display_name
+    except Exception:
+        player_level = 1
+        player_name = player.player_name
 
+    period = _normalize_obdobi_to_period(obdobi)
+
+    try:
+        player_profile_html = await fetch_profile_page(player.player_id, period)
+        data = scrape_with_regex(player_profile_html)
+    except Exception:
+        # Fallback if scraping fails for any reason
+        data = {}
+
+    data["player_level"] = data.get("player_level", player_level)
+    data["player_name"] = data.get("player_name", player_name)
+    data["hll_id"] = data.get("hll_id", "")
+    data["profile_url"] = data.get("profile_url", "")
+    data["comp_matches"] = int(data.get("comp_matches", 0))
+    data["kd_ratio"] = data.get("kd_ratio", 0)
+    data["kpm"] = data.get("kpm", 0)
+    data["win_rate_pct"] = data.get("win_rate_pct", 0)
+    data["hours_played"] = int(data.get("hours_played", 0))
+    data["matches_played"] = int(data.get("matches_played", 0))
+    return data
+    
+
+
+async def get_player_data(player, obdobi) -> str:
+    try:
         period = f"{obdobi.value}d" if obdobi.value > 0 else ""
         player_profile_html = await fetch_profile_page(player.player_id, period)
         data = scrape_with_regex(player_profile_html)
         data["hll_id"] = data.get("hll_id")
-        data["profile_url"] = data.get("profile_url") or ""
 
         if obdobi.value == 0:
             format_string = "%d %b %Y"
@@ -267,7 +325,7 @@ async def get_player_data(api_client, player, obdobi) -> str:
             since = datetime.now() - timedelta(days=obdobi.value)
         since_ts = f"<t:{int(since.timestamp())}:d>"
 
-        value = f"↘ {player_level}[{player.player_name}]({data["profile_url"]}) odehrál `{int(data["hours_played"])}` hodin a `{int(data["matches_played"])}` her od {since_ts}\n"
+        value = f"↘ [{data["level"] if data["level"] != "Unknown" else "???"}] [{player.player_name}]({data["profile_url"]}) odehrál `{int(data["hours_played"])}` hodin a `{int(data["matches_played"])}` her od {since_ts}\n"
         value += "↳ "
         stats = ["KD", "KPM", "WR"]
         stats_keys = ["kd_ratio", "kpm", "win_rate_pct"]

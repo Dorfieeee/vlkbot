@@ -197,7 +197,7 @@ class VipClaimView(discord.ui.LayoutView):
             title=f"VIP Status pro {api_player.display_name}",
         )
 
-        for server_number in [1, 2]:
+        for server_number in [1]:
             server_name = f"VLK #{server_number}"
             vip = next(
                 (v for v in api_player.vips if v.get("server_number") == server_number),

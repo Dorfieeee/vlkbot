@@ -61,9 +61,8 @@ def scrape_with_regex(html: str) -> dict:
 
     # Scalar stats: allow minimal spacing (site often has "2,267(0.27KPM)")
     patterns = [
-        (r"Total on servers\s*(\d+)\s*matches\s*/\s*([\d.]+)\s*hours", "total_matches", "total_hours"),
-        (r"Matchesplayed\s*(\d+)\s*matches\s*/\s*([\d.]+)\s*hours", "matches_played", "hours_played"),
-        (r"Matches played\s*(\d+)\s*matches\s*/\s*([\d.]+)\s*hours", "matches_played", "hours_played"),
+        (r"Total on servers\s*(\d+).\s*matches\s*/\s*(\d+).\s*hours", "total_matches", "total_hours"),
+        (r"Matches played\s*(\d+).*\s*matches\s*\/\s*(\d+).*\s*hours", "matches_played", "hours_played"),
         (r"Win rate\s*([\d.]+)\s*%", "win_rate_pct"),
         (r"Total kills\s*([\d,]+)\s*\(\s*([\d.]+)\s*KPM\)", "total_kills", "kpm"),
         (r"Total deaths\s*([\d,]+)\s*\(\s*([\d.]+)\s*DPM\)", "total_deaths", "dpm"),
@@ -74,6 +73,7 @@ def scrape_with_regex(html: str) -> dict:
         (r"Averagematch time played\s*([\d.]+)%\s*\(([\d.]+)\s*minutes\)", "avg_match_pct", "avg_minutes"),
         (r"First seen\s*(\d+\s+\w+\s+\d{4})", "first_seen"),
         (r"Competitive HLL\s*(\d+)\s*matches", "comp_matches"),
+        (r"Comp matches played\s*(\d+)\s*matches", "comp_matches"),
         (r"Most deaths to artillery\s*(\d+)\s*deaths", "most_deaths_artillery"),
         (r"Melee kills\s*(\d+)\s*\(\s*([\d.]+)\s*KD\)", "melee_kills", "melee_kd"),
         (r"Melee deaths\s*(\d+)\s*\(\s*once every (\d+) matches", "melee_deaths", "melee_deaths_every_n_matches"),
@@ -83,6 +83,7 @@ def scrape_with_regex(html: str) -> dict:
         (r"Sniper\s*(\d+)\s*on", "sniper_best"),
         (r"Armor\s*(\d+)\s*on", "armor_best"),
         (r"Artillery\s*(\d+)\s*on", "artillery_best"),
+        (r"Level\s*(\d+|Unknown)\s*", "level"),
     ]
 
     def try_parse(src):

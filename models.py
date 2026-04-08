@@ -120,6 +120,11 @@ class PlayerTrainingDetail:
     # Joined fields from trainings table
     training_name: str
 
+    # Joined fields from trainings table
+    player_hll_id: str
+    player_discord_id: str
+    player_name: str
+
     @classmethod
     def from_db_row(cls, row: sqlite3.Row) -> "PlayerTrainingDetail":
         return cls(
@@ -135,6 +140,9 @@ class PlayerTrainingDetail:
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             training_name=row["training_name"],
+            player_hll_id=row["player_hll_id"],
+            player_discord_id=row["player_discord_id"],
+            player_name=row["player_name"],
         )
 
 @dataclass
@@ -159,3 +167,5 @@ class PlayerSearchResult:
 
     player_id: str
     display_name: str  # Most recent name from names array
+
+

@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+from math import ceil
 import re
 from typing import Literal, Optional
 import discord
@@ -45,95 +46,107 @@ STATUS_TO_TEXT = {
 # ────────────────────────────────────────────────
 
 
-class TrainingSelectView(ui.View):
+class TrainingSelectView(discord.ui.LayoutView):
+
     @classmethod
     async def create(cls):
         self = cls(timeout=None)  # persistent view
 
-        trainings = await get_trainings()  # List[Training]
-
-        # Sort trainings in desired order: komunita < rekrut < valkyria
-        level_order = {"komunita": 0, "rekrut": 1, "valkyria": 2}
-        sorted_trainings = sorted(
-            trainings, key=lambda t: level_order.get(t.level, 999)
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(
+                f"# {EMOJIS["valkyria"]} ValkyriaㆍVýcvikové centrum"
+            ),
+            discord.ui.MediaGallery(discord.MediaGalleryItem(
+                media="https://media.discordapp.net/attachments/1450826189903237284/1473315771034636522/88fe69e2-6457-4ebf-9227-9fd48e4b26ac.webp?ex=6995c3bc&is=6994723c&hm=7d4232e03ecc1ab371ca96542f4147e3e14d179f59b674cedd39250341c2a174&=&format=webp&width=2560&height=838",
+            )),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(
+                "### Tvůj osobní panel"
+            ),
         )
 
-        # Group by level just for clarity (optional – you can skip grouping if you prefer flat list)
-        by_level = {"komunita": [], "rekrut": [], "valkyria": []}
-        for t in sorted_trainings:
-            by_level[t.level].append(t)
+        # Add player progress and registration buttons in a dedicated ActionRow
+        controls_row = discord.ui.ActionRow()
 
-        # Flatten back — we just needed the sort
-        sorted_trainings = (
-            by_level["komunita"] + by_level["rekrut"] + by_level["valkyria"]
-        )
-
-        # Now create buttons dynamically
-        row = 0
-        buttons_in_row = 0
-
-        for training in sorted_trainings:
-            # Skip if no custom id (shouldn't happen, but safety)
-            if not training.id:
-                continue
-
-            # Determine emoji based on level
-            emoji = EMOJIS.get(training.level, "❔")
-
-            # Create button dynamically
-            style = discord.ButtonStyle.blurple
-            if training.level == "rekrut":
-                style = discord.ButtonStyle.green
-            elif training.level == "valkyria":
-                style = discord.ButtonStyle.danger
-            button = ui.Button(
-                label=training.name,
-                style=style,
-                custom_id=f"training:{training.id}",
-                emoji=emoji,
-                row=row,
-            )
-
-            button.callback = self.create_callback(training.id)
-
-            # Add to view
-            self.add_item(button)
-
-            # Layout control: max 5 per row (Discord limit)
-            buttons_in_row += 1
-            if buttons_in_row >= 5:
-                buttons_in_row = 0
-                row += 1
-
-            # Safety – Discord has max 5 rows
-            if row > 4:
-                break
-
-        # Add player progress button
         progress_button = ui.Button(
             label="Tvůj progres",
             style=discord.ButtonStyle.grey,
             custom_id=f"training:dashboard",
             emoji=EMOJIS["hll"],
-            row=4,
         )
 
         progress_button.callback = self.show_player_progress
 
-        self.add_item(progress_button)
+        controls_row.add_item(progress_button)
 
-        # Add player registration button
         reg_button = ui.Button(
             label="Registrace",
             style=discord.ButtonStyle.grey,
             custom_id=f"training:registration",
             emoji=EMOJIS["reg"],
-            row=4,
         )
 
         reg_button.callback = self.start_registration_process
 
-        self.add_item(reg_button)
+        controls_row.add_item(reg_button)
+        container.add_item(controls_row)
+        container.add_item(discord.ui.Separator())
+        container.add_item(
+            discord.ui.TextDisplay(
+                "### Seznam dostupných výcviků"
+            )
+        )
+
+        trainings = await get_trainings()  # List[Training]
+        by_category = {"komunita": [], "rekrut": [], "valkyria": []}
+        for t in trainings:
+            by_category[t.level].append(t)
+
+        # Now create buttons dynamically into ActionRows
+        rows: list[discord.ui.ActionRow] = []
+
+        for category in by_category.keys():
+            current_row = discord.ui.ActionRow()
+            rows.append(current_row)
+            container.add_item(current_row)
+            buttons_in_row = 0
+            for training in by_category[category]:
+                # Skip if no custom id (shouldn't happen, but safety)
+                if not training.id:
+                    continue
+
+                # Determine emoji based on level
+                emoji = EMOJIS.get(training.level, "❔")
+
+                # Create button dynamically
+                style = discord.ButtonStyle.blurple
+                if training.level == "rekrut":
+                    style = discord.ButtonStyle.green
+                elif training.level == "valkyria":
+                    style = discord.ButtonStyle.danger
+
+                button = ui.Button(
+                    label=training.name,
+                    style=style,
+                    custom_id=f"training:{training.id}",
+                    emoji=emoji,
+                )
+
+                button.callback = self.create_callback(training.id)
+
+                # Add button into an ActionRow (max 5 buttons per row)
+                if buttons_in_row >= 5:
+                    current_row = discord.ui.ActionRow()
+                    rows.append(current_row)
+                    container.add_item(current_row)
+                    buttons_in_row = 0
+
+                current_row.add_item(button)
+
+                # Layout control: max 5 per row (Discord limit)
+                buttons_in_row += 1
+
+        self.add_item(container)
 
         return self
 
@@ -141,15 +154,15 @@ class TrainingSelectView(ui.View):
         await interaction.response.defer(ephemeral=True, thinking=True)        
         await start_player_registration(interaction, "## Registrace\nPropoj svůj Discord účet s HLL účtem vedeným na našich serverech")
 
-    
-
     async def show_player_progress(self, interaction: discord.Interaction):
         """Show player's training progress"""
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         player = await get_player(discord_id=interaction.user.id)
         if not player:
-            await interaction.followup.send(content="Nemáš u nás vedený žádný profil.")
+            await interaction.followup.send(
+                content="Nejdříve se musíš zaregistrovat.",
+            )
             return
 
         pts = await get_player_trainings(player_id=player.id)
@@ -291,7 +304,11 @@ class TrainingSignupView(ui.View):
             return
 
         if not self.player:
-            await start_player_registration(interaction)
+            await interaction.edit_original_response(
+                content="Nejdříve se musíš zaregistrovat.",
+                view=None,
+                embed=None,
+            )
             return
 
         role = guild.get_role(int(self.training.assigned_role))
@@ -409,9 +426,14 @@ class TrainingSignupView(ui.View):
         message = None
         if log_channel and log_channel.type == discord.ChannelType.text:
             if pt.channel_message_id and pt.message_id:
-                message = await log_channel.fetch_message(pt.message_id)
-                await message.delete()
-                await delete_channel_message(pt.channel_message_id)
+                try:
+                    message = await log_channel.fetch_message(pt.message_id)
+                    await message.delete()
+                    await delete_channel_message(pt.channel_message_id)
+                except discord.Forbidden:
+                    await interaction.response.send_message(content="Nepodařilo se odstranit zprávu ve výpisu přihlášek. Bot nemá práva.")
+                except:
+                    pass # when already deleted or not found
 
         await update_player_training(pt_id=pt.id, status="withdrawn")
 
@@ -538,6 +560,219 @@ class TrainingSignupAdminLogView(ui.View):
         self.add_item(complete_btn)
         self.add_item(fail_btn)
         self.add_item(withdraw_btn)
+
+
+class TrainingSignupListView(discord.ui.LayoutView):
+    """Layout view that lists player trainings and lets a moderator change their state."""
+
+    def __init__(self, training: str, trainings: list[PlayerTrainingDetail]):
+        # This view is meant to be used from a slash command, no need to persist forever
+        super().__init__(timeout=5 * 60)
+        self.training = training
+        self.page = 0
+        self.max_per_page = 5
+        self.total_pages = ceil(len(trainings) / self.max_per_page)
+
+        # Keep an internal mapping so we can refresh the UI after state changes
+        self._trainings: dict[int, PlayerTrainingDetail] = {
+            pt.id: pt
+            for pt in trainings
+        }
+
+        self._build_layout()
+
+    def _build_layout(self) -> None:
+        """(Re)build all containers and action rows based on current trainings."""
+        self.clear_items()
+
+        if not self._trainings:
+            empty_container = discord.ui.Container(
+                discord.ui.TextDisplay(
+                    "### Žádné přihlášky k vyřízení\n"
+                    "Nebyly nalezeny žádné výcviky ve stavu *interested* nebo *assigned*."
+                ),
+                accent_colour=discord.Colour.dark_grey(),
+            )
+            self.add_item(empty_container)
+            return
+
+        self.add_item(discord.ui.Container(discord.ui.TextDisplay(f"## {self.training} ({len(self._trainings)})")))
+
+        for i, pt in enumerate(self._trainings.values()):
+            if i < self.page * self.max_per_page:
+                continue
+            elif i >= (self.page + 1) * self.max_per_page:
+                break
+
+            status_text = STATUS_TO_TEXT.get(pt.status, pt.status)
+            buttons_disabled = True
+
+            if pt.status == "assigned" or pt.status == "interested":
+                accent_colour = discord.Colour.dark_grey()
+                buttons_disabled = False
+            elif pt.status == "completed":
+                accent_colour = discord.Colour.green()
+            elif pt.status == "withdrawn":
+                accent_colour = discord.Colour.yellow()
+            else:
+                accent_colour = discord.Colour.red()
+
+
+            container = discord.ui.Container(
+                discord.ui.TextDisplay(
+                    f"<@{pt.player_discord_id}> - {pt.player_name}\n"
+                    f"Aktuální stav: **{status_text}**"
+                ),
+                accent_colour=accent_colour,
+            )
+
+            row = discord.ui.ActionRow()
+
+            complete_btn = ui.Button(
+                label="Úspěšně dokončil",
+                style=discord.ButtonStyle.green,
+                disabled=buttons_disabled
+            )
+            fail_btn = ui.Button(
+                label="Neúspěšně dokončil",
+                style=discord.ButtonStyle.danger,
+                disabled=buttons_disabled
+            )
+            withdraw_btn = ui.Button(
+                label="Odhlaš z výcviku",
+                style=discord.ButtonStyle.grey,
+                disabled=buttons_disabled
+            )
+
+            complete_btn.callback = self._make_update_callback(pt, "completed")
+            fail_btn.callback = self._make_update_callback(pt, "failed")
+            withdraw_btn.callback = self._make_update_callback(pt, "withdrawn")
+
+            row.add_item(complete_btn)
+            row.add_item(fail_btn)
+            row.add_item(withdraw_btn)
+
+            container.add_item(row)
+            self.add_item(container)
+
+        if self.total_pages == 1: return
+
+        pagination_row = discord.ui.ActionRow()
+
+        start = ui.Button(
+            label="<<",
+            disabled=self.page == 0
+        )
+        prev = ui.Button(
+            label="<",
+            disabled=self.page == 0
+        )
+        curr = ui.Button(
+            label=f"{self.page + 1} of {self.total_pages}",
+            disabled=True
+        )
+        next = ui.Button(
+            label=">",
+            disabled=self.page == self.total_pages - 1
+        )
+        end = ui.Button(
+            label=">>",
+            disabled=self.page == self.total_pages - 1
+        )
+
+        start.callback = self._make_pagination_callback("start")
+        prev.callback = self._make_pagination_callback("prev")
+        next.callback = self._make_pagination_callback("next")
+        end.callback = self._make_pagination_callback("end")
+
+        pagination_row.add_item(start)
+        pagination_row.add_item(prev)
+        pagination_row.add_item(curr)
+        pagination_row.add_item(next)
+        pagination_row.add_item(end)
+
+        self.add_item(pagination_row)
+
+    def _make_pagination_callback(
+        self,
+        command: Literal["start", "prev", "next", "end"],
+    ):
+        async def callback(interaction: discord.Interaction) -> None:
+            match command:
+                case 'start':
+                    self.page = 0
+                case 'end':
+                    self.page = self.total_pages - 1
+                case 'next':
+                    self.page += 1
+                case 'prev':
+                    self.page -= 1                
+
+            # Rebuild the layout and update the message in-place
+            self._build_layout()
+            await interaction.response.edit_message(view=self)
+
+        return callback
+
+    def _make_update_callback(
+        self,
+        pt: PlayerTrainingDetail,
+        command: Literal["completed", "failed", "withdrawn"],
+    ):
+        async def callback(interaction: discord.Interaction) -> None:
+            # Update DB in the same way as TrainingSignupLogButton, but keep this list view
+
+            guild = interaction.guild
+            if not guild:
+                await interaction.response.send_message(
+                    "Nepodařilo se vytvořit přihlášku! Důvod: Guild neexistuje.",
+                    ephemeral=True,
+                )
+                return
+
+            match command:
+                case "completed":
+                    await update_player_training(
+                        pt_id=pt.id,
+                        status=command,
+                        completed_at=(
+                            datetime.datetime.now() if not pt.completed_at else None
+                        ),
+                    )
+                case "failed":
+                    await update_player_training(
+                        pt_id=pt.id,
+                        status=command,
+                    )
+                case "withdrawn":
+                    await update_player_training(
+                        pt_id=pt.id,
+                        status=command,
+                    )
+
+            log_channel = guild.get_channel(TRAINING_LOG_CHANNEL_ID)
+            message = None
+            if log_channel and log_channel.type == discord.ChannelType.text:
+                if pt.channel_message_id and pt.message_id:
+                    try:
+                        message = await log_channel.fetch_message(pt.message_id)
+                        await message.delete()
+                        await delete_channel_message(pt.channel_message_id)
+                    except discord.Forbidden:
+                        await interaction.response.send_message(content="Nepodařilo se odstranit zprávu ve výpisu přihlášek. Bot nemá práva.")
+                    except discord.DiscordException:
+                        pass # when already deleted or not found
+
+            # Re-fetch the updated detail so we show the latest status
+            refreshed = await get_player_training(pt.id)
+            if refreshed:
+                self._trainings[pt.id] = refreshed
+
+            # Rebuild the layout and update the message in-place
+            self._build_layout()
+            await interaction.response.edit_message(view=self)
+
+        return callback
 
 async def training_player_signup(interaction: discord.Interaction, training: Training, player: Player, player_training: Optional[PlayerTrainingDetail], status: Literal["assigned", "interested"] = "interested"):
     guild = interaction.guild

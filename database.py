@@ -5,7 +5,12 @@ from datetime import UTC, datetime
 from typing import List, Literal, Optional
 
 from config import DB_PATH
-from models import Player, PlayerTraining, PlayerTrainingDetail, Training
+from models import (
+    Player,
+    PlayerTraining,
+    PlayerTrainingDetail,
+    Training,
+)
 
 
 async def init_db() -> None:
@@ -210,7 +215,9 @@ async def edit_or_create_player(
             ),
         )
         await conn.commit()
-        return int(cur.lastrowid)
+        lastrowid = cur.lastrowid
+        assert lastrowid is not None
+        return int(lastrowid)
 
 
 async def has_claimed(discord_id: int) -> bool:
@@ -278,11 +285,11 @@ async def del_tracked_server(channel_id: str) -> None:
         await conn.commit()
 
 
-async def get_counter_channels() -> list[list[str]]:
+async def get_counter_channels() -> list[aiosqlite.Row]:
     async with aiosqlite.connect(DB_PATH) as conn:
         cur = await conn.execute("SELECT * FROM counter_channels")
         rows = await cur.fetchall()
-        return rows
+        return list(rows)
 
 
 async def set_counter_channel(channel_id: str, channel_name: str, role_id: str) -> None:
@@ -440,10 +447,14 @@ async def get_player_training(pt_id: int) -> Optional[PlayerTrainingDetail]:
                 t.name           AS training_name,
                 m.id    AS channel_message_id,
                 m.message_id    AS message_id,
-                m.channel_id    AS channel_id
+                m.channel_id    AS channel_id,
+                p.player_id AS player_hll_id,
+                p.discord_id AS player_discord_id,
+                p.player_name AS player_name
             FROM player_trainings pt
             LEFT JOIN channel_messages m ON pt.message_id = m.id
             INNER JOIN trainings t ON pt.training_id = t.id
+            INNER JOIN players p ON pt.player_id = p.id
             WHERE pt.id = ?
             """,
             (pt_id,),
@@ -479,10 +490,14 @@ async def get_player_trainings(
                 t.name           AS training_name,
                 m.id    AS channel_message_id,
                 m.message_id    AS message_id,
-                m.channel_id    AS channel_id
+                m.channel_id    AS channel_id,
+                p.player_id AS player_hll_id,
+                p.discord_id AS player_discord_id,
+                p.player_name AS player_name
             FROM player_trainings pt
             LEFT JOIN channel_messages m ON pt.message_id = m.id
             INNER JOIN trainings t ON pt.training_id = t.id
+            INNER JOIN players p ON pt.player_id = p.id
             WHERE 1=1
         """
         params: List = []
@@ -662,7 +677,7 @@ async def create_channel_message(channel_id: int, message_id: int) -> Optional[i
 
 async def delete_channel_message(id: int) -> bool:
     """
-    Create a new channel_messages record.
+    Delete channel_messages record.
     Returns the new row ID or None if creation failed (e.g., duplicate entry).
     """
     if not id:
@@ -679,3 +694,4 @@ async def delete_channel_message(id: int) -> bool:
             # General error fallback
             await conn.rollback()
             return False
+
