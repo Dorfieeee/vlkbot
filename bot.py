@@ -50,6 +50,11 @@ from views.training_grounds import (
     TrainingSignupLogButton,
     training_player_signup,
 )
+from views.hledam_spoluhrace import (
+    hledam_spoluhrace,
+    LfpCogItem,
+    LfpJoinItem,
+)
 from views.vip_claim import ThreadCloseView
 import httpx
 
@@ -108,7 +113,10 @@ async def setup_hook() -> None:  # type: ignore[override]
     bot.add_view(await TrainingSelectView.create())
     bot.add_dynamic_items(
         TrainingSignupLogButton,
+        LfpCogItem,
+        LfpJoinItem,
     )
+    bot.tree.add_command(hledam_spoluhrace)
 
     if GUILD_ID:
         guild_obj = discord.Object(id=GUILD_ID)
