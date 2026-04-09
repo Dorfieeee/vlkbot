@@ -3,7 +3,6 @@ Hledam spoluhrace (LFP) feature using Discord v2 components.
 
 Key design choice:
 - No database is used.
-- No hidden encoded payload is stored in the message.
 - The visible message layout itself is the source of truth and is parsed back on interactions.
 
 Requires discord.py 2.6+ for LayoutView, Section, TextDisplay, Label, and modal v2 components.
@@ -29,7 +28,7 @@ COG_CUSTOM_ID_PREFIX = "lfp:cog:"
 JOIN_ON_TIME_CUSTOM_ID = "lfp:join:ontime"
 JOIN_LATE_CUSTOM_ID = "lfp:join:late"
 
-TITLE_RE = re.compile(r"^(?P<creator_name>.+) hledá spoluhráče\.\.\.$")
+TITLE_RE = re.compile(r"^## (?P<creator_name>.+) hledá spoluhráče\.\.\.$")
 TIMESTAMP_RE = re.compile(r"<t:(?P<ts>\d+):[FRfDtT]>")
 CHANNEL_RE = re.compile(r"<#(?P<channel_id>\d+)>")
 CAPACITY_RE = re.compile(r"\*\*(?P<current>\d+)/(?P<capacity>\d+)\*\* hráčů")
@@ -291,7 +290,7 @@ class LfpView(discord.ui.LayoutView):
 
         self.add_item(
             discord.ui.Section(
-                discord.ui.TextDisplay(f"{creator_name} hledá spoluhráče..."),
+                discord.ui.TextDisplay(f"## {creator_name} hledá spoluhráče..."),
                 accessory=cog_button,
             )
         )

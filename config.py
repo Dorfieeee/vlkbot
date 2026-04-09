@@ -46,6 +46,7 @@ if ENVIRONMENT == "prod":
         REKRUT_INF_ROLE_ID,
         MEMBER_TANK_ROLE_ID,
         TRAINING_ROLES,
+        LFP_TRAINING_ROLES,
     )
 else:
     from discord_config.dev import (
@@ -65,6 +66,7 @@ else:
         REKRUT_INF_ROLE_ID,
         MEMBER_TANK_ROLE_ID,
         TRAINING_ROLES,
+        LFP_TRAINING_ROLES,
     )
 
 # Secrets and API configuration (still from .env)

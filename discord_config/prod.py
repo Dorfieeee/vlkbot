@@ -35,3 +35,15 @@ TRAINING_ROLES = {
     "mg_course": 1394757907488440382,
     "hll_basics": 1471110959019065517,
 }
+
+LFP_TRAINING_ROLES = {
+    "at_basic_course": 1394754482365010173,
+    "parkour_course": 1394755698197528686,
+    "infantry_course": 1396433334179074158,
+    "tank_course": 1394755997163323422,
+    "sl_course": 1394756311454843000,
+    "cmd_course": 1394756692217958420,
+    "recon_course": 1394757264946233444,
+    "mg_course": 1394757907488440382,
+    "hll_basics": 1471110959019065517,
+}
