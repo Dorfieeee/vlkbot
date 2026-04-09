@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 import discord
 from discord import app_commands
 
-from config import GUILD_ID
+from config import GUILD_ID, LFP_TRAINING_ROLES, MEMBER_ROLE_ID
 
 
 PRAGUE_TZ = ZoneInfo("Europe/Prague")
@@ -32,6 +32,7 @@ TITLE_RE = re.compile(r"^## (?P<creator_name>.+) hledá spoluhráče\.\.\.$")
 TIMESTAMP_RE = re.compile(r"<t:(?P<ts>\d+):[FRfDtT]>")
 CHANNEL_RE = re.compile(r"<#(?P<channel_id>\d+)>")
 CAPACITY_RE = re.compile(r"\*\*(?P<current>\d+)/(?P<capacity>\d+)\*\* hráčů")
+SPECIALIZATION_RE = re.compile(r"Specializace: <@&(?P<role_id>\d+)>")
 PLAYER_ON_TIME_RE = re.compile(r"^<@(?P<uid>\d+)>$")
 PLAYER_LATE_RE = re.compile(r"^<@(?P<uid>\d+)>(?: \*\((?P<note>.+)\)\*)?$")
 
@@ -75,6 +76,7 @@ def _meta_block_text(
     channel_id: int,
     guild_id: int,
     capacity: Optional[int],
+    specialization_role_id: Optional[int],
     on_time: list[str],
     late: list[str],
 ) -> str:
@@ -85,6 +87,8 @@ def _meta_block_text(
     ]
     if capacity is not None:
         lines.append(f"Kapacita: **{len(on_time) + len(late)}/{capacity}** hráčů")
+    if specialization_role_id is not None:
+        lines.append(f"Specializace: <@&{specialization_role_id}>")
     return "\n".join(lines)
 
 
@@ -100,7 +104,7 @@ def _parse_message_block(message_block: str) -> str:
     return "" if value == "-" else value
 
 
-def _parse_meta_block(meta_text: str) -> tuple[int, int, Optional[int]]:
+def _parse_meta_block(meta_text: str) -> tuple[int, int, Optional[int], Optional[int]]:
     timestamp_match = TIMESTAMP_RE.search(meta_text)
     channel_match = CHANNEL_RE.search(meta_text)
 
@@ -115,7 +119,12 @@ def _parse_meta_block(meta_text: str) -> tuple[int, int, Optional[int]]:
     if capacity_match is not None:
         capacity = int(capacity_match["capacity"])
 
-    return event_ts, channel_id, capacity
+    specialization_role_id: Optional[int] = None
+    specialization_match = SPECIALIZATION_RE.search(meta_text)
+    if specialization_match is not None:
+        specialization_role_id = int(specialization_match["role_id"])
+
+    return event_ts, channel_id, capacity, specialization_role_id
 
 
 def _parse_players_block(players_block: str) -> tuple[list[str], list[str]]:
@@ -162,7 +171,7 @@ def _state_from_message(message: discord.Message) -> dict[str, Any]:
     creator_id = _extract_creator_id(message)
     creator_name = title_match["creator_name"]
     message_text = _parse_message_block(displays[1])
-    event_ts, channel_id, capacity = _parse_meta_block(displays[2])
+    event_ts, channel_id, capacity, specialization_role_id = _parse_meta_block(displays[2])
     on_time, late = _parse_players_block(displays[3])
 
     cancelled = any("zrušena" in display.lower() for display in displays[4:])
@@ -178,6 +187,8 @@ def _state_from_message(message: discord.Message) -> dict[str, Any]:
     }
     if capacity is not None:
         state["cap"] = capacity
+    if specialization_role_id is not None:
+        state["spec"] = specialization_role_id
     if cancelled:
         state["x"] = 1
     return state
@@ -207,13 +218,6 @@ def _time_slot_values() -> list[str]:
     return values
 
 
-def _date_options(selected: str) -> list[discord.SelectOption]:
-    return [
-        discord.SelectOption(label="Dnes", value="today", default=selected == "today"),
-        discord.SelectOption(label="Zítra", value="tomorrow", default=selected == "tomorrow"),
-    ]
-
-
 def _time_options(selected: str) -> list[discord.SelectOption]:
     return [
         discord.SelectOption(label=value, value=value, default=value == selected)
@@ -221,11 +225,49 @@ def _time_options(selected: str) -> list[discord.SelectOption]:
     ]
 
 
-def _event_datetime_from_selects(day_value: str, time_value: str) -> datetime:
+def _format_training_key(key: str) -> str:
+    return key.replace("_", " ").title()
+
+
+def _specialization_options(
+    *,
+    guild: Optional[discord.Guild],
+    selected_role_id: Optional[int],
+) -> list[discord.SelectOption]:
+    options: list[discord.SelectOption] = []
+    default_already_set = False
+    for key, role_id in LFP_TRAINING_ROLES.items():
+        label = _format_training_key(key)
+        if guild is not None:
+            role = guild.get_role(role_id)
+            if role is not None:
+                label = role.name
+
+        is_default = False
+        if selected_role_id is not None and not default_already_set and selected_role_id == role_id:
+            is_default = True
+            default_already_set = True
+
+        options.append(
+            discord.SelectOption(
+                label=label[:100],
+                # Must stay unique across options; role IDs can repeat in config.
+                value=key,
+                default=is_default,
+            )
+        )
+    return options
+
+
+def _has_member_role(user: discord.User | discord.Member) -> bool:
+    if not isinstance(user, discord.Member):
+        return False
+    return any(role.id == MEMBER_ROLE_ID for role in user.roles)
+
+
+def _event_datetime_from_time(time_value: str) -> datetime:
     now = datetime.now(PRAGUE_TZ)
     target_date = now.date()
-    if day_value == "tomorrow":
-        target_date = target_date.fromordinal(target_date.toordinal() + 1)
 
     hour_text, minute_text = time_value.split(":", 1)
     return datetime(
@@ -303,6 +345,7 @@ class LfpView(discord.ui.LayoutView):
                     channel_id=self.state["ch"],
                     guild_id=self.guild_id,
                     capacity=self.state.get("cap"),
+                    specialization_role_id=self.state.get("spec"),
                     on_time=on_time,
                     late=late,
                 )
@@ -350,7 +393,11 @@ class LfpView(discord.ui.LayoutView):
 
         await interaction.response.send_message(
             "### Správa události",
-            view=LfpManageView(source_message=interaction.message, state=state),
+            view=LfpManageView(
+                source_message=interaction.message,
+                state=state,
+                can_choose_specialization=_has_member_role(interaction.user),
+            ),
             ephemeral=True,
         )
 
@@ -389,7 +436,11 @@ class LfpCogItem(
 
         await interaction.response.send_message(
             "### Správa události",
-            view=LfpManageView(source_message=interaction.message, state=state),
+            view=LfpManageView(
+                source_message=interaction.message,
+                state=state,
+                can_choose_specialization=_has_member_role(interaction.user),
+            ),
             ephemeral=True,
         )
 
@@ -552,10 +603,17 @@ class LfpLateModal(discord.ui.Modal, title="Přijdeš pozdě?"):
 
 
 class LfpManageView(discord.ui.View):
-    def __init__(self, *, source_message: discord.Message, state: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        *,
+        source_message: discord.Message,
+        state: dict[str, Any],
+        can_choose_specialization: bool,
+    ) -> None:
         super().__init__(timeout=120)
         self._source_message = source_message
         self._state = state
+        self._can_choose_specialization = can_choose_specialization
 
     @discord.ui.button(label="Upravit událost", style=discord.ButtonStyle.primary)
     async def edit_button(
@@ -564,7 +622,12 @@ class LfpManageView(discord.ui.View):
         button: discord.ui.Button,
     ) -> None:
         await interaction.response.send_modal(
-            LfpModal(source_message=self._source_message, prefill=self._state)
+            LfpModal(
+                source_message=self._source_message,
+                prefill=self._state,
+                guild=interaction.guild,
+                can_choose_specialization=self._can_choose_specialization,
+            )
         )
 
     @discord.ui.button(label="Zrušit událost", style=discord.ButtonStyle.danger)
@@ -598,9 +661,12 @@ class LfpModal(discord.ui.Modal, title="Hledám spoluhráče"):
         *,
         source_message: Optional[discord.Message] = None,
         prefill: Optional[dict[str, Any]] = None,
+        guild: Optional[discord.Guild] = None,
+        can_choose_specialization: bool = False,
     ) -> None:
         super().__init__()
         self._source_message = source_message
+        self._can_choose_specialization = can_choose_specialization
 
         message_default = prefill.get("msg", "") if prefill else ""
         capacity_default = ""
@@ -610,14 +676,11 @@ class LfpModal(discord.ui.Modal, title="Hledám spoluhráče"):
         channel_default = DEFAULT_VOICE_CHANNEL_ID
         if prefill and prefill.get("ch"):
             channel_default = int(prefill["ch"])
+        specialization_default = int(prefill["spec"]) if prefill and prefill.get("spec") else None
 
-        selected_day = "today"
         selected_time = "10:00"
         if prefill and prefill.get("ts"):
             event_dt = datetime.fromtimestamp(prefill["ts"], tz=PRAGUE_TZ)
-            now = datetime.now(PRAGUE_TZ)
-            if event_dt.date().toordinal() == now.date().toordinal() + 1:
-                selected_day = "tomorrow"
             selected_time = event_dt.strftime("%H:%M")
             if selected_time not in _time_slot_values():
                 selected_time = "10:00"
@@ -636,12 +699,6 @@ class LfpModal(discord.ui.Modal, title="Hledám spoluhráče"):
             placeholder="Například 5",
             max_length=4,
         )
-        self.date_select = discord.ui.Select(
-            options=_date_options(selected_day),
-            placeholder="Vyber den",
-            min_values=1,
-            max_values=1,
-        )
         self.time_select = discord.ui.Select(
             options=_time_options(selected_time),
             placeholder="Vyber čas",
@@ -657,6 +714,18 @@ class LfpModal(discord.ui.Modal, title="Hledám spoluhráče"):
             default_values=[_channel_default_value(channel_default)],
             placeholder="Vyber hlasový kanál pro sraz",
         )
+        self.specialization_select: Optional[discord.ui.Select] = None
+        if self._can_choose_specialization:
+            self.specialization_select = discord.ui.Select(
+                options=_specialization_options(
+                    guild=guild,
+                    selected_role_id=specialization_default,
+                ),
+                placeholder="Bez specializace",
+                required=False,
+                min_values=0,
+                max_values=1,
+            )
 
         self.add_item(
             discord.ui.Label(
@@ -667,15 +736,8 @@ class LfpModal(discord.ui.Modal, title="Hledám spoluhráče"):
         )
         self.add_item(
             discord.ui.Label(
-                text="Den",
-                description="Pro tuto událost můžeš vybrat jen dnes nebo zítra.",
-                component=self.date_select,
-            )
-        )
-        self.add_item(
-            discord.ui.Label(
                 text="Čas",
-                description="Časy jsou po 30 minutách od 10:00 do 22:00.",
+                description="Časy jsou po 30 minutách od 10:00 do 22:00 (dnes).",
                 component=self.time_select,
             )
         )
@@ -686,6 +748,14 @@ class LfpModal(discord.ui.Modal, title="Hledám spoluhráče"):
                 component=self.channel_select,
             )
         )
+        if self.specialization_select is not None:
+            self.add_item(
+                discord.ui.Label(
+                    text="Specializace tréninku (volitelně)",
+                    description="Vyber specializaci, pokud je potřeba.",
+                    component=self.specialization_select,
+                )
+            )
         self.add_item(
             discord.ui.Label(
                 text="Maximální počet hráčů (volitelně)",
@@ -695,10 +765,6 @@ class LfpModal(discord.ui.Modal, title="Hledám spoluhráče"):
         )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not self.date_select.values:
-            await interaction.response.send_message("Vyber prosím den srazu.", ephemeral=True)
-            return
-
         if not self.time_select.values:
             await interaction.response.send_message("Vyber prosím čas srazu.", ephemeral=True)
             return
@@ -726,10 +792,12 @@ class LfpModal(discord.ui.Modal, title="Hledám spoluhráče"):
 
         channel_id = self.channel_select.values[0].id
         message_text = self.message_input.value.strip()
-        event_dt = _event_datetime_from_selects(
-            self.date_select.values[0],
-            self.time_select.values[0],
-        )
+        specialization_role_id: Optional[int] = None
+        if self.specialization_select is not None and self.specialization_select.values:
+            specialization_key = self.specialization_select.values[0]
+            specialization_role_id = LFP_TRAINING_ROLES.get(specialization_key)
+
+        event_dt = _event_datetime_from_time(self.time_select.values[0])
         event_ts = int(event_dt.timestamp())
 
         if self._source_message is not None:
@@ -753,6 +821,12 @@ class LfpModal(discord.ui.Modal, title="Hledám spoluhráče"):
             }
             if capacity is not None:
                 state["cap"] = capacity
+            if specialization_role_id is not None:
+                state["spec"] = specialization_role_id
+            elif self._can_choose_specialization:
+                state.pop("spec", None)
+            elif previous_state.get("spec") is not None:
+                state["spec"] = previous_state["spec"]
             if previous_state.get("x"):
                 state["x"] = 1
 
@@ -773,6 +847,8 @@ class LfpModal(discord.ui.Modal, title="Hledám spoluhráče"):
         }
         if capacity is not None:
             state["cap"] = capacity
+        if specialization_role_id is not None:
+            state["spec"] = specialization_role_id
 
         await interaction.response.send_message(
             view=LfpView(state=state, guild_id=interaction.guild_id or GUILD_ID)
@@ -791,4 +867,9 @@ class LfpModal(discord.ui.Modal, title="Hledám spoluhráče"):
     description="Vytvoří příspěvek pro hledání spoluhráčů.",
 )
 async def hledam_spoluhrace(interaction: discord.Interaction) -> None:
-    await interaction.response.send_modal(LfpModal())
+    await interaction.response.send_modal(
+        LfpModal(
+            guild=interaction.guild,
+            can_choose_specialization=_has_member_role(interaction.user),
+        )
+    )
